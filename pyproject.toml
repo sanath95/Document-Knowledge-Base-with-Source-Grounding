@@ -1,0 +1,27 @@
+[project]
+name = "document-knowledge-base-with-source-grounding"
+version = "0.1.0"
+description = "Grounded document Q&A over PDFs for the Semorai AI engineer take-home."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "chromadb>=0.5.23",
+    "gradio>=5.9.0",
+    "numpy>=1.26.0",
+    "openai>=1.59.0",
+    "pypdf>=5.1.0",
+    "python-dotenv>=1.0.1",
+    "rank-bm25>=0.2.2",
+]
+
+[project.optional-dependencies]
+rerank = [
+    "sentence-transformers>=3.3.1",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
