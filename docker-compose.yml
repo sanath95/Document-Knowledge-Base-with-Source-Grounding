@@ -1,0 +1,51 @@
+services:
+
+  # ── One-shot indexer ─────────────────────────────────────────────────────────
+  # Runs once, populates the `knowledge_base` volume, then exits.
+  # `docker compose run --rm ingest` re-indexes when PDFs change.
+  # The serve container does NOT depend on this at startup — the volume
+  # is assumed to already be populated before `serve` is started.
+  ingest:
+    image: semorai-kb-ingest:latest
+    container_name: semorai-kb-ingest
+    build:
+      context: .
+      dockerfile: Dockerfile.ingest
+    env_file:
+      - .env                      # secrets stay out of the image
+    volumes:
+      - ./data:/data:ro           # PDFs — read-only inside container
+      - knowledge_base:/knowledge_base
+      - hf_models:/app/hf_models  # cache reranker model across runs
+    environment:
+      PDF_FOLDER: /data
+      CHROMA_PERSIST_DIR: /knowledge_base
+      RERANKER_CACHE_DIR: /app/hf_models
+    restart: "no"                 # one-shot — never restart automatically
+
+  # ── Web agent ────────────────────────────────────────────────────────────────
+  serve:
+    image: semorai-kb-serve:latest
+    container_name: semorai-kb-serve
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    volumes:
+      - knowledge_base:/knowledge_base   # read-only — serve never writes
+      - hf_models:/app/hf_models
+    environment:
+      CHROMA_PERSIST_DIR: /knowledge_base
+      RERANKER_CACHE_DIR: /app/hf_models
+      HOST: 0.0.0.0
+      PORT: 8000
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+
+# ── Named volumes ─────────────────────────────────────────────────────────────
+volumes:
+  knowledge_base:   # ChromaDB — persists between container restarts
+  hf_models:        # HuggingFace model weights — avoid re-downloading
