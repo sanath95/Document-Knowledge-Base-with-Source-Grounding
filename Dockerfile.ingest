@@ -1,0 +1,39 @@
+FROM python:3.12-slim AS builder
+
+WORKDIR /build
+
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+COPY requirements.ingest.txt .
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir --no-compile -r requirements.ingest.txt \
+    && find /opt/venv -type d \( -name test -o -name tests -o -name __pycache__ \) -prune -exec rm -rf {} +
+
+
+FROM python:3.12-slim AS runtime
+
+RUN useradd --create-home --shell /bin/bash appuser
+
+WORKDIR /app
+
+COPY --from=builder /opt/venv /opt/venv
+
+COPY src/config/      ./src/config/
+COPY src/ingestion/   ./src/ingestion/
+COPY src/retrieval/   ./src/retrieval/
+COPY src/utils/       ./src/utils/
+COPY src/ingest.py    ./src/ingest.py
+
+RUN mkdir -p /data /knowledge_base /app/hf_models \
+    && chown -R appuser:appuser /app /data /knowledge_base
+
+USER appuser
+
+ENV PYTHONPATH=/app/src \
+    PATH="/opt/venv/bin:$PATH" \
+    HF_HOME=/app/hf_models \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+CMD ["python", "src/ingest.py"]

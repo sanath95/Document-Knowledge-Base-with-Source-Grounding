@@ -1,3 +1,6 @@
+hf_models/
+knowledge_base/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
