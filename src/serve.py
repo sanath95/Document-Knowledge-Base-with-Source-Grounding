@@ -1,7 +1,4 @@
-"""
-serve.py
-────────
-Start the pydantic-ai web agent.
+"""Start the FastAPI document question-answering service.
 
 Usage:
     python serve.py
@@ -11,6 +8,11 @@ from __future__ import annotations
 
 import os
 import sys
+from collections.abc import AsyncGenerator
+
+from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field, field_validator
 
 from agent.qa_agent import QAAgent
 from config.settings import load_settings
@@ -19,14 +21,47 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
-logger.info("Loading settings …")
+class QueryRequest(BaseModel):
+    """Request body accepted by the question-answering endpoint."""
+
+    query: str = Field(min_length=1, max_length=10_000)
+
+    @field_validator("query")
+    @classmethod
+    def query_must_not_be_blank(cls, value: str) -> str:
+        query = value.strip()
+        if not query:
+            raise ValueError("query must not be blank")
+        return query
+
+
+logger.info("Loading settings...")
 settings = load_settings()
 
-logger.info("Initialising QA agent …")
+logger.info("Initialising QA agent...")
 qa_agent = QAAgent(settings)
 
-logger.info("Starting web server …")
-app = qa_agent.to_web()
+app = FastAPI(title="Document Knowledge Base API")
+
+
+async def _safe_answer_stream(query: str) -> AsyncGenerator[str, None]:
+    """Keep the agent stream in one task and sanitize stream-time errors."""
+    try:
+        async for chunk in qa_agent.stream_answer(query):
+            yield chunk
+    except Exception:
+        logger.exception("Answer stream failed")
+        yield "\n\n[The answer service is temporarily unavailable.]"
+
+
+@app.post("/query", response_class=StreamingResponse)
+async def query_documents(request: QueryRequest) -> StreamingResponse:
+    """Stream the grounded final answer for a document question."""
+    return StreamingResponse(
+        _safe_answer_stream(request.query),
+        media_type="text/plain; charset=utf-8",
+        headers={"X-Content-Type-Options": "nosniff"},
+    )
 
 
 if __name__ == "__main__":
@@ -35,6 +70,7 @@ if __name__ == "__main__":
 
         host = os.environ.get("HOST", "0.0.0.0")
         port = int(os.environ.get("PORT", "8000"))
+        logger.info("Starting API server on %s:%s...", host, port)
         uvicorn.run(app, host=host, port=port)
     except EnvironmentError as exc:
         logger.error("Environment error: %s", exc)

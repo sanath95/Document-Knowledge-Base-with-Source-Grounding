@@ -2,7 +2,7 @@
 
 Semorai technical interview task: a PDF knowledge-base QA system that answers questions from indexed documents and cites the source pages used as evidence.
 
-The project builds a retrieval-augmented generation pipeline around local PDF ingestion, persistent vector search, reranking, and a Pydantic-AI web agent. The agent is instructed to answer only from retrieved evidence and to cite sources inline using the format `[pdf_name, page X]`.
+The project builds a retrieval-augmented generation pipeline around local PDF ingestion, persistent vector search, reranking, and a FastAPI streaming API backed by Pydantic-AI. The agent is instructed to answer only from retrieved evidence and to cite sources inline using the format `[pdf_name, page X]`.
 
 ## Features
 
@@ -14,7 +14,7 @@ The project builds a retrieval-augmented generation pipeline around local PDF in
 - ChromaDB persistence for local vector storage.
 - Reciprocal Rank Fusion (RRF) of semantic and keyword candidates.
 - Cross-encoder reranking to improve retrieval precision.
-- Pydantic-AI web agent for document question answering.
+- FastAPI endpoint that streams the Pydantic-AI agent's final answer.
 - Source-grounded answers with page-level citations.
 
 ## How It Works
@@ -54,7 +54,7 @@ The architecture separates ingestion, retrieval, reranking, and answering so eac
 - Vector and BM25 search retrieve complementary semantic and keyword candidate
   sets. RRF combines their ranks before the cross-encoder promotes the chunks
   that best match the exact question.
-- Pydantic-AI keeps the agent layer small and exposes the QA agent as a web app with minimal glue code.
+- Pydantic-AI keeps the agent layer small, while FastAPI exposes a minimal streaming query endpoint.
 - Docker separates one-shot ingestion from long-running serving because indexing documents and answering questions have different lifecycles.
 
 ## Project Structure
@@ -67,7 +67,7 @@ src/
   retrieval/    ChromaDB vector store and cross-encoder reranker
   utils/        Logging and shared domain models
 data/           Input PDFs for ingestion
-Dockerfile      Runtime image for the web agent
+Dockerfile      Runtime image for the streaming API
 Dockerfile.ingest
 docker-compose.yml
 ```
@@ -129,13 +129,23 @@ Ingest PDFs into the local ChromaDB store:
 python src\ingest.py
 ```
 
-Start the web agent:
+Start the API:
 
 ```powershell
 python src\serve.py
 ```
 
 The server starts on `http://localhost:8000` by default. Override `HOST` or `PORT` in the environment if needed.
+
+Send a query and stream the final answer:
+
+```powershell
+curl.exe --no-buffer -X POST http://localhost:8000/query `
+  -H "Content-Type: application/json" `
+  -d '{"query":"What are the main findings?"}'
+```
+
+The endpoint accepts a JSON object with one `query` field and returns the answer as `text/plain`. Invalid requests return a FastAPI validation error. Once streaming starts the HTTP status is already committed, so unexpected agent failures are logged and returned as sanitized error text.
 
 ## Docker Usage
 
@@ -145,7 +155,7 @@ Build and run ingestion once:
 docker compose run --rm ingest
 ```
 
-Start the web agent:
+Start the API:
 
 ```powershell
 docker compose up serve

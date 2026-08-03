@@ -7,6 +7,7 @@ All external dependencies are injected via AgentDeps — no module-level singlet
 
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from typing import Optional
 
@@ -206,9 +207,11 @@ class QAAgent:
             rrf_k=settings.agent.rrf_k,
         )
 
-    def to_web(self) -> object:
-        """Expose the agent as a web app via pydantic-ai's built-in server."""
-        return self._agent.to_web(deps=self._deps)
+    async def stream_answer(self, query: str) -> AsyncGenerator[str, None]:
+        """Stream only the final answer text after the agent runs its tools."""
+        async with self._agent.run_stream(query, deps=self._deps) as result:
+            async for chunk in result.stream_text(delta=True):
+                yield chunk
 
     @property
     def vector_store(self) -> VectorStore:
