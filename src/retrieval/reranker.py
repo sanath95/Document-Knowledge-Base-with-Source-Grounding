@@ -68,6 +68,7 @@ class Reranker:
 
         reranked = [
             RetrievedChunk(
+                chunk_id=chunk.chunk_id,
                 document=chunk.document,
                 metadata=chunk.metadata,
                 score=score,
@@ -78,3 +79,7 @@ class Reranker:
 
         reranked.sort(key=lambda c: c.score, reverse=True)
         return reranked
+
+    def tokenize(self, text: str) -> list[str]:
+        """Tokenize text with the cross-encoder's Hugging Face tokenizer."""
+        return self._model.tokenizer.tokenize(text)

@@ -96,12 +96,18 @@ class VectorStore:
 
         result = self._collection.query(**query_kwargs)
 
+        ids: list[str] = result["ids"][0]
         docs: list[str] = result["documents"][0]
         metadatas: list[dict] = result["metadatas"][0]
 
         return [
-            RetrievedChunk(document=doc, metadata=meta, score=0.0)
-            for doc, meta in zip(docs, metadatas)
+            RetrievedChunk(
+                chunk_id=chunk_id,
+                document=doc,
+                metadata=meta,
+                score=0.0,
+            )
+            for chunk_id, doc, meta in zip(ids, docs, metadatas)
         ]
 
     def list_documents(self) -> list[DocumentIndex]:

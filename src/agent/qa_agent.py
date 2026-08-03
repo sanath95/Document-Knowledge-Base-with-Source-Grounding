@@ -15,6 +15,8 @@ from pydantic_ai.models.openai import OpenAIModelSettings
 
 from config.settings import AgentConfig, Settings
 from ingestion.embedder import Embedder
+from retrieval.bm25_retriever import BM25Retriever
+from retrieval.fusion import reciprocal_rank_fusion
 from retrieval.reranker import Reranker
 from retrieval.vector_store import VectorStore
 from utils.logging import get_logger
@@ -32,7 +34,8 @@ Your job:
 4. Answer ONLY from retrieved evidence.
 
 Retrieval strategy:
-- Rewrite vague questions into precise retrieval queries.
+- Rewrite vague questions into precise retrieval queries while preserving exact
+  identifiers, names, and domain terms that are useful for keyword search.
 - Break multi-part questions into separate focused searches.
 - For comparisons retrieve evidence for each item independently.
 - Prefer multiple targeted searches over one broad search.
@@ -66,7 +69,12 @@ class AgentDeps:
     vector_store: VectorStore
     embedder: Embedder
     reranker: Reranker
-    retrieval_top_k: int = 10
+    bm25_retriever: BM25Retriever
+    dense_top_k: int = 25
+    bm25_top_k: int = 25
+    fusion_top_k: int = 25
+    final_top_k: int = 10
+    rrf_k: int = 60
 
 
 def build_agent(config: AgentConfig) -> Agent[AgentDeps]:
@@ -117,7 +125,7 @@ def build_agent(config: AgentConfig) -> Agent[AgentDeps]:
         filters: Optional[dict] = None,
     ) -> list[dict]:
         """
-        Retrieve and rerank document chunks relevant to *search_query*.
+        Retrieve, fuse, and rerank document chunks relevant to *search_query*.
 
         Args:
             search_query:
@@ -129,19 +137,31 @@ def build_agent(config: AgentConfig) -> Agent[AgentDeps]:
                   {"pdf_name": {"$in": ["a.pdf", "b.pdf"]}}
                   {"page_number": {"$gte": 10}}
 
-        Returns a reranked list of chunks with 'document', 'metadata', 'score'.
+        Returns a hybrid-reranked list of chunks with 'document', 'metadata',
+        and cross-encoder 'score'.
         """
         query_embedding = await ctx.deps.embedder.embed_one(search_query)
 
-        candidates: list[RetrievedChunk] = ctx.deps.vector_store.query(
+        dense_candidates: list[RetrievedChunk] = ctx.deps.vector_store.query(
             query_embedding=query_embedding,
-            top_k=ctx.deps.retrieval_top_k,
+            top_k=ctx.deps.dense_top_k,
             filters=filters,
         )
 
+        sparse_candidates: list[RetrievedChunk] = ctx.deps.bm25_retriever.query(
+            query=search_query,
+            top_k=ctx.deps.bm25_top_k,
+            filters=filters,
+        )
+
+        fused_candidates: list[RetrievedChunk] = reciprocal_rank_fusion(
+            [dense_candidates, sparse_candidates],
+            rrf_k=ctx.deps.rrf_k,
+        )[: ctx.deps.fusion_top_k]
+
         reranked: list[RetrievedChunk] = await ctx.deps.reranker.rerank(
             query=search_query,
-            chunks=candidates,
+            chunks=fused_candidates,
         )
 
         return [
@@ -150,7 +170,7 @@ def build_agent(config: AgentConfig) -> Agent[AgentDeps]:
                 "metadata": chunk.metadata,
                 "score": chunk.score,
             }
-            for chunk in reranked
+            for chunk in reranked[: ctx.deps.final_top_k]
         ]
 
     return agent
@@ -169,12 +189,21 @@ class QAAgent:
         self._vector_store = VectorStore(settings.chroma)
         self._embedder = Embedder(settings.openai_api_key, settings.embedding)
         self._reranker = Reranker(settings.reranker)
+        self._bm25_retriever = BM25Retriever(
+            collection=self._vector_store.collection,
+            tokenizer=self._reranker.tokenize,
+        )
         self._agent = build_agent(settings.agent)
         self._deps = AgentDeps(
             vector_store=self._vector_store,
             embedder=self._embedder,
             reranker=self._reranker,
-            retrieval_top_k=settings.agent.retrieval_top_k,
+            bm25_retriever=self._bm25_retriever,
+            dense_top_k=settings.agent.dense_top_k,
+            bm25_top_k=settings.agent.bm25_top_k,
+            fusion_top_k=settings.agent.fusion_top_k,
+            final_top_k=settings.agent.final_top_k,
+            rrf_k=settings.agent.rrf_k,
         )
 
     def to_web(self) -> object:

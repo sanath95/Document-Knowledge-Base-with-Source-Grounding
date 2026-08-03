@@ -11,5 +11,6 @@ dependencies = [
     "pydantic-ai>=1.93.0",
     "pymupdf4llm>=1.27.2.3",
     "python-dotenv>=1.2.2",
+    "rank-bm25>=0.2.2",
     "sentence-transformers>=5.4.1",
 ]

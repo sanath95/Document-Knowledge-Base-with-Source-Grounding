@@ -10,7 +10,9 @@ The project builds a retrieval-augmented generation pipeline around local PDF in
 - OCR-capable text extraction into per-page Markdown.
 - Markdown/header-aware chunking to preserve document structure.
 - OpenAI embeddings for semantic retrieval.
+- BM25 keyword retrieval using the cross-encoder's tokenizer.
 - ChromaDB persistence for local vector storage.
+- Reciprocal Rank Fusion (RRF) of semantic and keyword candidates.
 - Cross-encoder reranking to improve retrieval precision.
 - Pydantic-AI web agent for document question answering.
 - Source-grounded answers with page-level citations.
@@ -32,8 +34,11 @@ flowchart LR
     UserQuery --> AIAgent
     AIAgent --> QueryEmbedding
     Store --> VectorSearch
+    Store --> BM25Search
     QueryEmbedding --> VectorSearch
-    VectorSearch --> Rerank
+    VectorSearch --> RRF
+    BM25Search --> RRF
+    RRF --> Rerank
     Rerank --> AIAgent
     AIAgent --> Answer
 ```
@@ -46,7 +51,9 @@ The architecture separates ingestion, retrieval, reranking, and answering so eac
 
 - Markdown/header-aware chunking is used instead of fixed-size chunking because headings preserve useful document context and usually produce more meaningful retrieval units.
 - ChromaDB is used as a local persistent vector store, which keeps the project easy to run without requiring external database infrastructure.
-- Vector search retrieves a broad candidate set quickly, while reranking promotes the chunks that best match the exact question.
+- Vector and BM25 search retrieve complementary semantic and keyword candidate
+  sets. RRF combines their ranks before the cross-encoder promotes the chunks
+  that best match the exact question.
 - Pydantic-AI keeps the agent layer small and exposes the QA agent as a web app with minimal glue code.
 - Docker separates one-shot ingestion from long-running serving because indexing documents and answering questions have different lifecycles.
 
@@ -99,6 +106,11 @@ RERANKER_CACHE_DIR=./hf_models
 RERANKER_THRESHOLD=0.0
 LLM_MODEL=openai:gpt-4o-mini
 LLM_TEMPERATURE=0.0
+DENSE_TOP_K=25
+BM25_TOP_K=25
+FUSION_TOP_K=25
+FINAL_TOP_K=10
+RRF_K=60
 ```
 
 ## Local Usage

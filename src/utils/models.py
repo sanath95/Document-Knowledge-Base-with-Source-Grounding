@@ -64,6 +64,7 @@ class DocumentChunk:
 @dataclass(frozen=True)
 class RetrievedChunk:
     """A chunk returned by the vector store, optionally reranked."""
+    chunk_id: str
     document: str
     metadata: dict[str, str | int]
     score: float

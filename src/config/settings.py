@@ -50,7 +50,11 @@ class AgentConfig:
     llm_model: str = "openai:gpt-4o-mini"
     temperature: float = 0.0
     parallel_tool_calls: bool = True
-    retrieval_top_k: int = 10
+    dense_top_k: int = 25
+    bm25_top_k: int = 25
+    fusion_top_k: int = 25
+    final_top_k: int = 10
+    rrf_k: int = 60
 
 
 @dataclass(frozen=True)
@@ -96,6 +100,11 @@ def load_settings() -> Settings:
         agent=AgentConfig(
             llm_model=os.environ.get("LLM_MODEL", "openai:gpt-4o-mini"),
             temperature=float(os.environ.get("LLM_TEMPERATURE", "0.0")),
+            dense_top_k=int(os.environ.get("DENSE_TOP_K", "25")),
+            bm25_top_k=int(os.environ.get("BM25_TOP_K", "25")),
+            fusion_top_k=int(os.environ.get("FUSION_TOP_K", "25")),
+            final_top_k=int(os.environ.get("FINAL_TOP_K", "10")),
+            rrf_k=int(os.environ.get("RRF_K", "60")),
         ),
         ingestion=IngestionConfig(
             pdf_folder=Path(os.environ.get("PDF_FOLDER", "./data")),
