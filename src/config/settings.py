@@ -40,7 +40,7 @@ class ChromaConfig:
 
 @dataclass(frozen=True)
 class RerankerConfig:
-    model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    model_name: str = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
     cache_dir: str = "./hf_models"
     score_threshold: float = 0.0
 
