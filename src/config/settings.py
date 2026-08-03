@@ -88,7 +88,7 @@ def load_settings() -> Settings:
         ),
         reranker=RerankerConfig(
             model_name=os.environ.get(
-                "RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2"
+                "RERANKER_MODEL", "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
             ),
             cache_dir=os.environ.get("RERANKER_CACHE_DIR", "./hf_models"),
             score_threshold=float(os.environ.get("RERANKER_THRESHOLD", "0.0")),
