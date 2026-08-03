@@ -24,6 +24,7 @@ COPY src/config/      ./src/config/
 COPY src/ingestion/   ./src/ingestion/
 COPY src/retrieval/   ./src/retrieval/
 COPY src/agent/       ./src/agent/
+COPY src/orchestration/ ./src/orchestration/
 COPY src/utils/       ./src/utils/
 COPY src/serve.py     ./src/serve.py
 

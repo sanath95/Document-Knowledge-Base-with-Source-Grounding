@@ -14,7 +14,7 @@ The project builds a retrieval-augmented generation pipeline around local PDF in
 - ChromaDB persistence for local vector storage.
 - Reciprocal Rank Fusion (RRF) of semantic and keyword candidates.
 - Cross-encoder reranking to improve retrieval precision.
-- FastAPI endpoint that streams the Pydantic-AI agent's final answer.
+- LangGraph-orchestrated FastAPI endpoint that streams the Pydantic-AI agent's final answer.
 - Source-grounded answers with page-level citations.
 
 ## How It Works
@@ -31,7 +31,8 @@ flowchart LR
 **Serve**
 ```mermaid
 flowchart LR
-    UserQuery --> AIAgent
+    UserQuery --> QueryGraph
+    QueryGraph --> AIAgent
     AIAgent --> QueryEmbedding
     Store --> VectorSearch
     Store --> BM25Search
@@ -64,6 +65,7 @@ src/
   agent/        Pydantic-AI QA agent and retrieval tools
   config/       Environment-driven application settings
   ingestion/    PDF parsing, chunking, embedding, and ingestion pipeline
+  orchestration/ LangGraph query workflow
   retrieval/    ChromaDB vector store and cross-encoder reranker
   utils/        Logging and shared domain models
 data/           Input PDFs for ingestion

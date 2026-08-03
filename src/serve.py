@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from agent.qa_agent import QAAgent
 from config.settings import load_settings
+from orchestration.query_graph import build_query_graph
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -41,14 +42,22 @@ settings = load_settings()
 logger.info("Initialising QA agent...")
 qa_agent = QAAgent(settings)
 
+logger.info("Compiling query graph...")
+query_graph = build_query_graph(qa_agent)
+
 app = FastAPI(title="Document Knowledge Base API")
 
 
 async def _safe_answer_stream(query: str) -> AsyncGenerator[str, None]:
-    """Keep the agent stream in one task and sanitize stream-time errors."""
+    """Stream graph output and sanitize stream-time errors."""
     try:
-        async for chunk in qa_agent.stream_answer(query):
-            yield chunk
+        async for event in query_graph.astream(
+            {"query": query},
+            stream_mode="custom",
+            version="v2",
+        ):
+            if event["type"] == "custom":
+                yield event["data"]
     except Exception:
         logger.exception("Answer stream failed")
         yield "\n\n[The answer service is temporarily unavailable.]"
