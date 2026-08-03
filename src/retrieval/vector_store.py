@@ -13,7 +13,12 @@ import chromadb
 
 from config.settings import ChromaConfig
 from utils.logging import get_logger
-from utils.models import DocumentChunk, DocumentIndex, RetrievedChunk
+from utils.models import (
+    DocumentChunk,
+    DocumentIndex,
+    RetrievalFilter,
+    RetrievedChunk,
+)
 
 logger = get_logger(__name__)
 
@@ -73,7 +78,7 @@ class VectorStore:
         self,
         query_embedding: list[float],
         top_k: int = 10,
-        filters: dict | None = None,
+        filters: RetrievalFilter | None = None,
     ) -> list[RetrievedChunk]:
         """
         Retrieve the *top_k* most similar chunks.
@@ -81,28 +86,63 @@ class VectorStore:
         Args:
             query_embedding: Embedding of the search query.
             top_k:           Maximum number of results.
-            filters:         Optional ChromaDB metadata filter dict.
+            filters:         Optional typed document/page filter.
 
         Returns:
-            List of RetrievedChunk objects (unranked; score = cosine similarity).
+            List of RetrievedChunk objects ordered by cosine similarity.
         """
+        if top_k <= 0 or self._collection.count() == 0:
+            return []
+
         query_kwargs: dict = {
             "query_embeddings": [query_embedding],
-            "n_results": top_k,
-            "include": ["documents", "metadatas"],
+            "n_results": min(top_k, self._collection.count()),
+            "include": ["documents", "metadatas", "distances"],
         }
         if filters:
-            query_kwargs["where"] = filters
+            where = filters.to_chroma_where()
+            if where:
+                query_kwargs["where"] = where
 
         result = self._collection.query(**query_kwargs)
 
-        docs: list[str] = result["documents"][0]
-        metadatas: list[dict] = result["metadatas"][0]
+        ids: list[str] = result["ids"][0]
+        docs: list[str] = (result.get("documents") or [[]])[0]
+        metadatas: list[dict] = (result.get("metadatas") or [[]])[0]
+        distances: list[float] = (result.get("distances") or [[]])[0]
 
         return [
-            RetrievedChunk(document=doc, metadata=meta, score=0.0)
-            for doc, meta in zip(docs, metadatas)
+            RetrievedChunk(
+                chunk_id=chunk_id,
+                document=doc,
+                metadata=meta,
+                score=1.0 - float(distance),
+                dense_score=1.0 - float(distance),
+                dense_rank=rank,
+            )
+            for rank, (chunk_id, doc, meta, distance) in enumerate(
+                zip(ids, docs, metadatas, distances),
+                start=1,
+            )
         ]
+
+    def export_chunks(self) -> list[RetrievedChunk]:
+        """Read all stored chunk IDs, documents, and metadata from Chroma."""
+        result = self._collection.get(include=["documents", "metadatas"])
+        ids: list[str] = result.get("ids") or []
+        documents: list[str] = result.get("documents") or []
+        metadatas: list[dict] = result.get("metadatas") or []
+
+        chunks = [
+            RetrievedChunk(
+                chunk_id=chunk_id,
+                document=document,
+                metadata=metadata,
+                score=0.0,
+            )
+            for chunk_id, document, metadata in zip(ids, documents, metadatas)
+        ]
+        return sorted(chunks, key=lambda chunk: chunk.chunk_id)
 
     def list_documents(self) -> list[DocumentIndex]:
         """

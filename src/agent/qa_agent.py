@@ -8,17 +8,16 @@ All external dependencies are injected via AgentDeps — no module-level singlet
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
-
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.models.openai import OpenAIModelSettings
 
 from config.settings import AgentConfig, Settings
 from ingestion.embedder import Embedder
+from retrieval.hybrid_retriever import HybridRetriever
 from retrieval.reranker import Reranker
 from retrieval.vector_store import VectorStore
 from utils.logging import get_logger
-from utils.models import DocumentIndex, RetrievedChunk
+from utils.models import DocumentIndex, RetrievalFilter, RetrievedChunk
 
 logger = get_logger(__name__)
 
@@ -64,9 +63,7 @@ Answer style:
 class AgentDeps:
     """All runtime dependencies required by the agent's tools."""
     vector_store: VectorStore
-    embedder: Embedder
-    reranker: Reranker
-    retrieval_top_k: int = 10
+    hybrid_retriever: HybridRetriever
 
 
 def build_agent(config: AgentConfig) -> Agent[AgentDeps]:
@@ -114,7 +111,7 @@ def build_agent(config: AgentConfig) -> Agent[AgentDeps]:
     async def retrieve_and_rerank(
         ctx: RunContext[AgentDeps],
         search_query: str,
-        filters: Optional[dict] = None,
+        filters: RetrievalFilter | None = None,
     ) -> list[dict]:
         """
         Retrieve and rerank document chunks relevant to *search_query*.
@@ -123,25 +120,17 @@ def build_agent(config: AgentConfig) -> Agent[AgentDeps]:
             search_query:
                 Optimised semantic retrieval query.
             filters:
-                Optional ChromaDB metadata filter.
+                Optional document/page filter shared by dense and sparse search.
                 Examples:
-                  {"pdf_name": "report.pdf"}
-                  {"pdf_name": {"$in": ["a.pdf", "b.pdf"]}}
-                  {"page_number": {"$gte": 10}}
+                  {"pdf_names": ["report.pdf"]}
+                  {"pdf_names": ["a.pdf", "b.pdf"], "page_from": 10}
+                  {"page_from": 10, "page_to": 20}
 
-        Returns a reranked list of chunks with 'document', 'metadata', 'score'.
+        Returns chunks with the existing response fields and retrieval diagnostics.
         """
-        query_embedding = await ctx.deps.embedder.embed_one(search_query)
-
-        candidates: list[RetrievedChunk] = ctx.deps.vector_store.query(
-            query_embedding=query_embedding,
-            top_k=ctx.deps.retrieval_top_k,
-            filters=filters,
-        )
-
-        reranked: list[RetrievedChunk] = await ctx.deps.reranker.rerank(
+        reranked: list[RetrievedChunk] = await ctx.deps.hybrid_retriever.retrieve(
             query=search_query,
-            chunks=candidates,
+            filters=filters,
         )
 
         return [
@@ -149,6 +138,15 @@ def build_agent(config: AgentConfig) -> Agent[AgentDeps]:
                 "document": chunk.document,
                 "metadata": chunk.metadata,
                 "score": chunk.score,
+                "chunk_id": chunk.chunk_id,
+                "dense_score": chunk.dense_score,
+                "dense_rank": chunk.dense_rank,
+                "sparse_score": chunk.sparse_score,
+                "sparse_rank": chunk.sparse_rank,
+                "fused_score": chunk.fused_score,
+                "fused_rank": chunk.fused_rank,
+                "reranker_score": chunk.reranker_score,
+                "reranker_rank": chunk.reranker_rank,
             }
             for chunk in reranked
         ]
@@ -169,12 +167,16 @@ class QAAgent:
         self._vector_store = VectorStore(settings.chroma)
         self._embedder = Embedder(settings.openai_api_key, settings.embedding)
         self._reranker = Reranker(settings.reranker)
-        self._agent = build_agent(settings.agent)
-        self._deps = AgentDeps(
+        self._hybrid_retriever = HybridRetriever(
             vector_store=self._vector_store,
             embedder=self._embedder,
             reranker=self._reranker,
-            retrieval_top_k=settings.agent.retrieval_top_k,
+            config=settings.retrieval,
+        )
+        self._agent = build_agent(settings.agent)
+        self._deps = AgentDeps(
+            vector_store=self._vector_store,
+            hybrid_retriever=self._hybrid_retriever,
         )
 
     def to_web(self) -> object:

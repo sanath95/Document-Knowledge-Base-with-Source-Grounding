@@ -9,9 +9,9 @@ The project builds a retrieval-augmented generation pipeline around local PDF in
 - PDF ingestion from a configurable document folder.
 - OCR-capable text extraction into per-page Markdown.
 - Markdown/header-aware chunking to preserve document structure.
-- OpenAI embeddings for semantic retrieval.
+- Multilingual hybrid retrieval using OpenAI embeddings and in-memory BM25S.
 - ChromaDB persistence for local vector storage.
-- Cross-encoder reranking to improve retrieval precision.
+- Reciprocal rank fusion (RRF) and multilingual BGE cross-encoder reranking.
 - Pydantic-AI web agent for document question answering.
 - Source-grounded answers with page-level citations.
 
@@ -31,14 +31,17 @@ flowchart LR
 flowchart LR
     UserQuery --> AIAgent
     AIAgent --> QueryEmbedding
-    Store --> VectorSearch
-    QueryEmbedding --> VectorSearch
-    VectorSearch --> Rerank
+    Store --> DenseSearch
+    QueryEmbedding --> DenseSearch
+    Store --> BM25
+    DenseSearch --> RRF
+    BM25 --> RRF
+    RRF --> Rerank
     Rerank --> AIAgent
     AIAgent --> Answer
 ```
 
-Ingestion turns PDFs into structured, embedded chunks stored in ChromaDB. At query time, the agent retrieves and reranks relevant chunks before answering with page-level citations.
+Ingestion turns PDFs into structured, embedded chunks stored in ChromaDB. At serving startup, all stored chunk text and metadata are also loaded into a disposable in-memory BM25S index. Each query runs dense and sparse retrieval with the same document/page filters, fuses their ranks with RRF, and reranks the best candidates before answering with page-level citations.
 
 ## Design Note
 
@@ -46,7 +49,8 @@ The architecture separates ingestion, retrieval, reranking, and answering so eac
 
 - Markdown/header-aware chunking is used instead of fixed-size chunking because headings preserve useful document context and usually produce more meaningful retrieval units.
 - ChromaDB is used as a local persistent vector store, which keeps the project easy to run without requiring external database infrastructure.
-- Vector search retrieves a broad candidate set quickly, while reranking promotes the chunks that best match the exact question.
+- Dense retrieval handles multilingual semantic matches, while Unicode-aware BM25 retrieval preserves exact names and technical terms without language-specific stemming or stop words.
+- Reciprocal rank fusion combines both rankings without assuming their raw scores are directly comparable. `BAAI/bge-reranker-v2-m3` then reranks the fused candidates across languages.
 - Pydantic-AI keeps the agent layer small and exposes the QA agent as a web app with minimal glue code.
 - Docker separates one-shot ingestion from long-running serving because indexing documents and answering questions have different lifecycles.
 
@@ -94,9 +98,16 @@ EMBED_MODEL=text-embedding-3-small
 EMBED_BATCH_SIZE=500
 CHROMA_COLLECTION=knowledge_base
 CHROMA_PERSIST_DIR=./knowledge_base
-RERANKER_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
+RERANKER_MODEL=BAAI/bge-reranker-v2-m3
 RERANKER_CACHE_DIR=./hf_models
+RERANKER_BATCH_SIZE=8
+RERANKER_MAX_LENGTH=512
 RERANKER_THRESHOLD=0.0
+DENSE_TOP_K=30
+SPARSE_TOP_K=30
+RRF_K=60
+RERANK_CANDIDATES=20
+RETRIEVAL_TOP_K=6
 LLM_MODEL=openai:gpt-4o-mini
 LLM_TEMPERATURE=0.0
 ```
@@ -108,8 +119,11 @@ Install dependencies:
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\activate
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
+
+Use a fresh project virtual environment. Installing into a shared Python environment that already contains packages such as Docling, Gradio, Streamlit, or Torchvision can make pip retain incompatible versions from those unrelated applications.
 
 Ingest PDFs into the local ChromaDB store:
 
@@ -124,6 +138,8 @@ python src\serve.py
 ```
 
 The server starts on `http://localhost:8000` by default. Override `HOST` or `PORT` in the environment if needed.
+
+On the first serving start, Hugging Face downloads the multilingual `BAAI/bge-reranker-v2-m3` model into `RERANKER_CACHE_DIR`. Later starts reuse that cache. Restart the application after ingestion so the disposable BM25 index is rebuilt from the updated Chroma collection.
 
 ## Docker Usage
 
@@ -142,7 +158,7 @@ docker compose up serve
 The Docker setup uses named volumes:
 
 - `knowledge_base` persists the ChromaDB index between container runs.
-- `hf_models` caches Hugging Face reranker model files.
+- `hf_models` caches Hugging Face reranker model files, including the larger multilingual model downloaded on first start.
 
 Run ingestion again whenever PDFs change:
 

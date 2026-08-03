@@ -40,9 +40,20 @@ class ChromaConfig:
 
 @dataclass(frozen=True)
 class RerankerConfig:
-    model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    model_name: str = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
     cache_dir: str = "./hf_models"
     score_threshold: float = 0.0
+    batch_size: int = 8
+    max_length: int = 512
+
+
+@dataclass(frozen=True)
+class HybridRetrievalConfig:
+    dense_top_k: int = 30
+    sparse_top_k: int = 30
+    rrf_k: int = 60
+    rerank_candidates: int = 20
+    final_top_k: int = 6
 
 
 @dataclass(frozen=True)
@@ -50,7 +61,6 @@ class AgentConfig:
     llm_model: str = "openai:gpt-4o-mini"
     temperature: float = 0.0
     parallel_tool_calls: bool = True
-    retrieval_top_k: int = 10
 
 
 @dataclass(frozen=True)
@@ -70,6 +80,7 @@ class Settings:
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     chroma: ChromaConfig = field(default_factory=ChromaConfig)
     reranker: RerankerConfig = field(default_factory=RerankerConfig)
+    retrieval: HybridRetrievalConfig = field(default_factory=HybridRetrievalConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
     ingestion: IngestionConfig = field(default_factory=IngestionConfig)
 
@@ -88,10 +99,19 @@ def load_settings() -> Settings:
         ),
         reranker=RerankerConfig(
             model_name=os.environ.get(
-                "RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2"
+                "RERANKER_MODEL", "BAAI/bge-reranker-v2-m3"
             ),
             cache_dir=os.environ.get("RERANKER_CACHE_DIR", "./hf_models"),
             score_threshold=float(os.environ.get("RERANKER_THRESHOLD", "0.0")),
+            batch_size=int(os.environ.get("RERANKER_BATCH_SIZE", "8")),
+            max_length=int(os.environ.get("RERANKER_MAX_LENGTH", "512")),
+        ),
+        retrieval=HybridRetrievalConfig(
+            dense_top_k=int(os.environ.get("DENSE_TOP_K", "30")),
+            sparse_top_k=int(os.environ.get("SPARSE_TOP_K", "30")),
+            rrf_k=int(os.environ.get("RRF_K", "60")),
+            rerank_candidates=int(os.environ.get("RERANK_CANDIDATES", "20")),
+            final_top_k=int(os.environ.get("RETRIEVAL_TOP_K", "6")),
         ),
         agent=AgentConfig(
             llm_model=os.environ.get("LLM_MODEL", "openai:gpt-4o-mini"),

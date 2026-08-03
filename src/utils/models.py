@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
 
 # ── Ingestion models ──────────────────────────────────────────────────────────
 
@@ -61,12 +63,80 @@ class DocumentChunk:
 
 # ── Retrieval models ──────────────────────────────────────────────────────────
 
+class RetrievalFilter(BaseModel):
+    """Typed, shared eligibility filter for dense and sparse retrieval."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    pdf_names: list[str] | None = Field(
+        default=None,
+        description="PDF filenames to search (case-insensitive).",
+    )
+    page_from: int | None = Field(default=None, ge=1)
+    page_to: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def validate_page_range(self) -> "RetrievalFilter":
+        if (
+            self.page_from is not None
+            and self.page_to is not None
+            and self.page_from > self.page_to
+        ):
+            raise ValueError("page_from must be less than or equal to page_to")
+        return self
+
+    @property
+    def normalised_pdf_names(self) -> list[str] | None:
+        if not self.pdf_names:
+            return None
+        return sorted({DocumentChunk.normalise_source(name) for name in self.pdf_names})
+
+    def to_chroma_where(self) -> dict | None:
+        """Translate this filter to an equivalent Chroma metadata filter."""
+        clauses: list[dict] = []
+        names = self.normalised_pdf_names
+        if names:
+            clauses.append(
+                {"pdf_name": names[0] if len(names) == 1 else {"$in": names}}
+            )
+        if self.page_from is not None:
+            clauses.append({"page_number": {"$gte": self.page_from}})
+        if self.page_to is not None:
+            clauses.append({"page_number": {"$lte": self.page_to}})
+
+        if not clauses:
+            return None
+        if len(clauses) == 1:
+            return clauses[0]
+        return {"$and": clauses}
+
+    def matches(self, metadata: dict[str, str | int]) -> bool:
+        """Apply the same filter semantics to an exported Chroma chunk."""
+        names = self.normalised_pdf_names
+        source = DocumentChunk.normalise_source(str(metadata.get("pdf_name", "")))
+        page = int(metadata.get("page_number", 0))
+        return (
+            (not names or source in names)
+            and (self.page_from is None or page >= self.page_from)
+            and (self.page_to is None or page <= self.page_to)
+        )
+
+
 @dataclass(frozen=True)
 class RetrievedChunk:
     """A chunk returned by the vector store, optionally reranked."""
     document: str
     metadata: dict[str, str | int]
     score: float
+    chunk_id: str = ""
+    dense_score: float | None = None
+    sparse_score: float | None = None
+    fused_score: float | None = None
+    reranker_score: float | None = None
+    dense_rank: int | None = None
+    sparse_rank: int | None = None
+    fused_rank: int | None = None
+    reranker_rank: int | None = None
 
     @property
     def source_pdf(self) -> str:
