@@ -54,8 +54,7 @@ class PDFParser:
                 continue
             pages.append(
                 PageContent(
-                    # pymupdf4llm returns 0-based page numbers; normalise to 1-based
-                    page_number=chunk["metadata"]["page_number"] + 1,
+                    page_number=chunk["metadata"]["page_number"],
                     markdown=text,
                     source_pdf=source_name,
                 )
