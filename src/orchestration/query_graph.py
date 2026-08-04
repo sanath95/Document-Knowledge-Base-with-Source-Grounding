@@ -7,7 +7,7 @@ from typing import Literal, NotRequired, Protocol, TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from orchestration.answer_validator import AnswerValidation
-from orchestration.query_classifier import QueryAssessment
+from orchestration.query_classifier import QuerySafetyAssessment
 from utils.logging import get_logger
 from utils.models import EvidenceChunk, QAResult
 
@@ -17,16 +17,8 @@ _UNSAFE_RESPONSE = (
     "I can't help with that request. You can ask a question about the indexed "
     "documents."
 )
-_OUT_OF_SCOPE_RESPONSE = (
-    "I can answer questions about the indexed documents. Please ask about their "
-    "content, findings, or sources."
-)
-_AMBIGUOUS_RESPONSE = (
-    "Please clarify what you would like to know from the indexed documents."
-)
 _CLASSIFICATION_FAILURE_RESPONSE = (
-    "I couldn't safely classify that request. Please rephrase it as a question "
-    "about the indexed documents."
+    "I couldn't safely classify that request. Please rephrase it and try again."
 )
 
 
@@ -37,9 +29,9 @@ class AnswerGenerator(Protocol):
 
 
 class QueryClassifierProtocol(Protocol):
-    """Interface implemented by the tool-less input classifier."""
+    """Interface implemented by the tool-less safety classifier."""
 
-    async def classify(self, query: str) -> QueryAssessment: ...
+    async def classify(self, query: str) -> QuerySafetyAssessment: ...
 
 
 class AnswerValidatorProtocol(Protocol):
@@ -57,7 +49,7 @@ class QueryState(TypedDict):
     """State carried by the query workflow."""
 
     query: str
-    assessment: NotRequired[QueryAssessment]
+    safety_assessment: NotRequired[QuerySafetyAssessment]
     classification_failed: NotRequired[bool]
     answer: NotRequired[str]
     retrieved_chunks: NotRequired[tuple[EvidenceChunk, ...]]
@@ -76,11 +68,14 @@ def build_query_graph(
 
     async def classify_query(state: QueryState) -> dict:
         try:
-            assessment = await query_classifier.classify(state["query"])
+            safety_assessment = await query_classifier.classify(state["query"])
         except Exception:
             logger.exception("Query classification failed")
             return {"classification_failed": True}
-        return {"assessment": assessment, "classification_failed": False}
+        return {
+            "safety_assessment": safety_assessment,
+            "classification_failed": False,
+        }
 
     def route_query(
         state: QueryState,
@@ -88,12 +83,8 @@ def build_query_graph(
         if state.get("classification_failed"):
             return "write_guardrail_response"
 
-        assessment = state.get("assessment")
-        if (
-            assessment is not None
-            and assessment.safety == "safe"
-            and assessment.scope == "in_scope"
-        ):
+        safety_assessment = state.get("safety_assessment")
+        if safety_assessment is not None and safety_assessment.safety == "safe":
             return "run_qa_agent"
         return "write_guardrail_response"
 
@@ -101,15 +92,15 @@ def build_query_graph(
         if state.get("classification_failed"):
             response = _CLASSIFICATION_FAILURE_RESPONSE
         else:
-            assessment = state.get("assessment")
-            if assessment is None:
+            safety_assessment = state.get("safety_assessment")
+            if safety_assessment is None:
                 response = _CLASSIFICATION_FAILURE_RESPONSE
-            elif assessment.safety == "unsafe":
+            elif safety_assessment.safety == "unsafe":
                 response = _UNSAFE_RESPONSE
-            elif assessment.scope == "ambiguous":
-                response = _AMBIGUOUS_RESPONSE
             else:
-                response = _OUT_OF_SCOPE_RESPONSE
+                raise RuntimeError(
+                    "Safe query was routed to the guardrail response"
+                )
 
         return {"response": response, "completed": True}
 

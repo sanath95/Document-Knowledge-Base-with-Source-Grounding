@@ -14,7 +14,7 @@ The project builds a retrieval-augmented generation pipeline around local PDF in
 - ChromaDB persistence for local vector storage.
 - Reciprocal Rank Fusion (RRF) of semantic and keyword candidates.
 - Cross-encoder reranking to improve retrieval precision.
-- Tool-less structured query classification for safety and document scope.
+- Tool-less structured query classification for safety.
 - LangGraph-orchestrated FastAPI endpoint that returns either a validated grounded answer or a fixed guardrail response.
 - Source-grounded answers with page-level citations.
 - Schema-constrained faithfulness and context-sufficiency validation.
@@ -35,8 +35,8 @@ flowchart LR
 flowchart LR
     UserQuery --> QueryGraph
     QueryGraph --> QueryClassifier
-    QueryClassifier -->|Safe and in scope| AIAgent
-    QueryClassifier -->|Unsafe, ambiguous, or out of scope| GuardrailResponse
+    QueryClassifier -->|Safe| AIAgent
+    QueryClassifier -->|Unsafe or classification failure| GuardrailResponse
     AIAgent --> QueryEmbedding
     Store --> VectorSearch
     Store --> BM25Search
@@ -158,10 +158,12 @@ curl.exe -X POST http://localhost:8000/query `
 The endpoint accepts a JSON object with one `query` field and returns the complete answer and validation as `text/plain`. It buffers generation until validation finishes, so unvalidated answer text is never sent. Invalid requests return a FastAPI validation error, and unexpected processing failures return a sanitized service error.
 
 Before the QA agent runs, a separate tool-less classifier returns a structured
-`safety` and `scope` assessment. Only safe, in-scope requests reach the agent.
-Unsafe, ambiguous, and out-of-scope requests receive fixed application-owned
-responses through the same endpoint. If classification fails, the graph
-fails closed and does not invoke the QA agent.
+`safety` assessment. Safe requests reach the retrieval-backed QA agent regardless
+of whether their topic appears relevant to the indexed documents. The agent must
+answer only from retrieved evidence and say when that evidence is insufficient.
+Unsafe requests receive a fixed application-owned response through the same
+endpoint. If safety classification fails, the graph fails closed and does not
+invoke the QA agent.
 
 For admitted queries, every chunk returned to the QA agent is captured in
 request-local state and deduplicated by its stable chunk ID. After generation, a

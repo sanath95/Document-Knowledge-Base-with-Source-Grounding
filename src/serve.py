@@ -43,7 +43,7 @@ settings = load_settings()
 logger.info("Initialising QA agent...")
 qa_agent = QAAgent(settings)
 
-logger.info("Initialising query classifier...")
+logger.info("Initialising query safety classifier...")
 query_classifier = QueryClassifier(settings.openai_api_key, settings.classifier)
 
 logger.info("Initialising answer validator...")
