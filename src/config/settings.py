@@ -1,8 +1,4 @@
-"""
-Centralised configuration — loaded once at import time.
-All values come from environment variables; defaults are only for
-development convenience and must be overridden in production.
-"""
+"""Application configuration loaded from environment variables and defaults."""
 
 from __future__ import annotations
 
@@ -27,49 +23,51 @@ def _require_env(key: str) -> str:
 
 @dataclass(frozen=True)
 class EmbeddingConfig:
-    model: str = "text-embedding-3-small"
-    batch_size: int = 500
+    model: str = os.environ.get("EMBED_MODEL", "text-embedding-3-small")
+    batch_size: int = int(os.environ.get("EMBED_BATCH_SIZE", "500"))
 
 
 @dataclass(frozen=True)
 class ChromaConfig:
-    collection_name: str = "knowledge_base"
-    persist_dir: str = "./knowledge_base"
+    collection_name: str = os.environ.get("CHROMA_COLLECTION", "knowledge_base")
+    persist_dir: str = os.environ.get("CHROMA_PERSIST_DIR", "./knowledge_base")
     distance_metric: str = "cosine"
 
 
 @dataclass(frozen=True)
 class RerankerConfig:
-    model_name: str = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
-    cache_dir: str = "./hf_models"
-    score_threshold: float = 0.0
+    model_name: str = os.environ.get(
+        "RERANKER_MODEL", "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
+    )
+    cache_dir: str = os.environ.get("RERANKER_CACHE_DIR", "./hf_models")
+    score_threshold: float = float(os.environ.get("RERANKER_THRESHOLD", "0.0"))
 
 
 @dataclass(frozen=True)
 class ClassifierConfig:
-    model: str = "gpt-5.4-nano"
+    model: str = os.environ.get("CLASSIFIER_MODEL", "gpt-5.4-nano")
 
 
 @dataclass(frozen=True)
 class ValidatorConfig:
-    model: str = "gpt-5.4-nano"
+    model: str = os.environ.get("VALIDATOR_MODEL", "gpt-5.4-nano")
 
 
 @dataclass(frozen=True)
 class AgentConfig:
-    llm_model: str = "openai:gpt-4o-mini"
-    temperature: float = 0.0
+    llm_model: str = os.environ.get("LLM_MODEL", "openai:gpt-4o-mini")
+    temperature: float = float(os.environ.get("LLM_TEMPERATURE", "0.0"))
     parallel_tool_calls: bool = True
-    dense_top_k: int = 25
-    bm25_top_k: int = 25
-    fusion_top_k: int = 25
-    final_top_k: int = 10
-    rrf_k: int = 60
+    dense_top_k: int = int(os.environ.get("DENSE_TOP_K", "25"))
+    bm25_top_k: int = int(os.environ.get("BM25_TOP_K", "25"))
+    fusion_top_k: int = int(os.environ.get("FUSION_TOP_K", "25"))
+    final_top_k: int = int(os.environ.get("FINAL_TOP_K", "10"))
+    rrf_k: int = int(os.environ.get("RRF_K", "60"))
 
 
 @dataclass(frozen=True)
 class IngestionConfig:
-    pdf_folder: Path = field(default_factory=lambda: Path("./data"))
+    pdf_folder: Path = Path(os.environ.get("PDF_FOLDER", "./data"))
     supported_extensions: tuple[str, ...] = (".pdf",)
     markdown_headers: tuple[tuple[str, str], ...] = (
         ("#", "h1"),
@@ -91,40 +89,5 @@ class Settings:
 
 
 def load_settings() -> Settings:
-    """Build and return validated Settings from the environment."""
-    return Settings(
-        openai_api_key=_require_env("OPENAI_API_KEY"),
-        embedding=EmbeddingConfig(
-            model=os.environ.get("EMBED_MODEL", "text-embedding-3-small"),
-            batch_size=int(os.environ.get("EMBED_BATCH_SIZE", "500")),
-        ),
-        chroma=ChromaConfig(
-            collection_name=os.environ.get("CHROMA_COLLECTION", "knowledge_base"),
-            persist_dir=os.environ.get("CHROMA_PERSIST_DIR", "./knowledge_base"),
-        ),
-        reranker=RerankerConfig(
-            model_name=os.environ.get(
-                "RERANKER_MODEL", "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
-            ),
-            cache_dir=os.environ.get("RERANKER_CACHE_DIR", "./hf_models"),
-            score_threshold=float(os.environ.get("RERANKER_THRESHOLD", "0.0")),
-        ),
-        classifier=ClassifierConfig(
-            model=os.environ.get("CLASSIFIER_MODEL", "gpt-5.4-nano"),
-        ),
-        validator=ValidatorConfig(
-            model=os.environ.get("VALIDATOR_MODEL", "gpt-5.4-nano"),
-        ),
-        agent=AgentConfig(
-            llm_model=os.environ.get("LLM_MODEL", "openai:gpt-4o-mini"),
-            temperature=float(os.environ.get("LLM_TEMPERATURE", "0.0")),
-            dense_top_k=int(os.environ.get("DENSE_TOP_K", "25")),
-            bm25_top_k=int(os.environ.get("BM25_TOP_K", "25")),
-            fusion_top_k=int(os.environ.get("FUSION_TOP_K", "25")),
-            final_top_k=int(os.environ.get("FINAL_TOP_K", "10")),
-            rrf_k=int(os.environ.get("RRF_K", "60")),
-        ),
-        ingestion=IngestionConfig(
-            pdf_folder=Path(os.environ.get("PDF_FOLDER", "./data")),
-        ),
-    )
+    """Build settings from the values loaded above."""
+    return Settings(openai_api_key=_require_env("OPENAI_API_KEY"))
