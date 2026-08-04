@@ -59,7 +59,6 @@ class BM25Retriever:
         self,
         query: str,
         top_k: int = 10,
-        filters: dict | None = None,
     ) -> list[RetrievedChunk]:
         """Return the highest-ranked lexical matches for *query*."""
         if self._index is None or top_k <= 0:
@@ -69,18 +68,12 @@ class BM25Retriever:
         if not query_tokens:
             return []
 
-        allowed_ids: set[str] | None = None
-        if filters:
-            filtered = self._collection.get(where=filters, include=[])
-            allowed_ids = set(filtered.get("ids") or [])
-
         scores = self._index.get_scores(query_tokens)
         query_token_set = set(query_tokens)
         candidate_indexes = [
             index
             for index, chunk in enumerate(self._chunks)
-            if (allowed_ids is None or chunk.chunk_id in allowed_ids)
-            and not query_token_set.isdisjoint(self._token_sets[index])
+            if not query_token_set.isdisjoint(self._token_sets[index])
         ]
         candidate_indexes.sort(key=lambda index: float(scores[index]), reverse=True)
 

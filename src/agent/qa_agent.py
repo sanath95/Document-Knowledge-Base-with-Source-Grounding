@@ -8,7 +8,6 @@ All external dependencies are injected via AgentDeps — no module-level singlet
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from typing import Optional
 
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.models.openai import OpenAIModelSettings
@@ -99,7 +98,6 @@ def build_agent(config: AgentConfig) -> Agent[AgentDeps]:
     async def retrieve_and_rerank(
         ctx: RunContext[AgentDeps],
         search_query: str,
-        filters: Optional[dict] = None,
     ) -> list[dict]:
         """
         Retrieve, fuse, and rerank document chunks relevant to *search_query*.
@@ -107,12 +105,6 @@ def build_agent(config: AgentConfig) -> Agent[AgentDeps]:
         Args:
             search_query:
                 Optimised semantic retrieval query.
-            filters:
-                Optional ChromaDB metadata filter.
-                Examples:
-                  {"pdf_name": "report.pdf"}
-                  {"pdf_name": {"$in": ["a.pdf", "b.pdf"]}}
-                  {"page_number": {"$gte": 10}}
 
         Returns a hybrid-reranked list of chunks with 'document', 'metadata',
         and cross-encoder 'score'.
@@ -120,7 +112,7 @@ def build_agent(config: AgentConfig) -> Agent[AgentDeps]:
         with observation(
             name="retrieve_and_rerank",
             as_type="retriever",
-            input={"search_query": search_query, "filters": filters},
+            input={"search_query": search_query},
             metadata={
                 "dense_top_k": ctx.deps.dense_top_k,
                 "bm25_top_k": ctx.deps.bm25_top_k,
@@ -133,13 +125,11 @@ def build_agent(config: AgentConfig) -> Agent[AgentDeps]:
             dense_candidates: list[RetrievedChunk] = ctx.deps.vector_store.query(
                 query_embedding=query_embedding,
                 top_k=ctx.deps.dense_top_k,
-                filters=filters,
             )
 
             sparse_candidates: list[RetrievedChunk] = ctx.deps.bm25_retriever.query(
                 query=search_query,
                 top_k=ctx.deps.bm25_top_k,
-                filters=filters,
             )
 
             fused_candidates: list[RetrievedChunk] = reciprocal_rank_fusion(

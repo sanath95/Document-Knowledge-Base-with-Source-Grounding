@@ -73,7 +73,6 @@ class VectorStore:
         self,
         query_embedding: list[float],
         top_k: int = 10,
-        filters: dict | None = None,
     ) -> list[RetrievedChunk]:
         """
         Retrieve the *top_k* most similar chunks.
@@ -81,20 +80,15 @@ class VectorStore:
         Args:
             query_embedding: Embedding of the search query.
             top_k:           Maximum number of results.
-            filters:         Optional ChromaDB metadata filter dict.
 
         Returns:
             List of RetrievedChunk objects (unranked; score = cosine similarity).
         """
-        query_kwargs: dict = {
-            "query_embeddings": [query_embedding],
-            "n_results": top_k,
-            "include": ["documents", "metadatas"],
-        }
-        if filters:
-            query_kwargs["where"] = filters
-
-        result = self._collection.query(**query_kwargs)
+        result = self._collection.query(
+            query_embeddings=[query_embedding],
+            n_results=top_k,
+            include=["documents", "metadatas"],
+        )
 
         ids: list[str] = result["ids"][0]
         docs: list[str] = result["documents"][0]
