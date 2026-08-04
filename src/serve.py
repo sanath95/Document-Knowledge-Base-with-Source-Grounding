@@ -8,14 +8,14 @@ from __future__ import annotations
 
 import os
 import sys
-from collections.abc import AsyncGenerator
 
 from fastapi import FastAPI
-from fastapi.responses import StreamingResponse
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field, field_validator
 
 from agent.qa_agent import QAAgent
 from config.settings import load_settings
+from orchestration.answer_validator import AnswerValidator
 from orchestration.query_classifier import QueryClassifier
 from orchestration.query_graph import build_query_graph
 from utils.logging import get_logger
@@ -46,35 +46,39 @@ qa_agent = QAAgent(settings)
 logger.info("Initialising query classifier...")
 query_classifier = QueryClassifier(settings.openai_api_key, settings.classifier)
 
+logger.info("Initialising answer validator...")
+answer_validator = AnswerValidator(settings.openai_api_key, settings.validator)
+
 logger.info("Compiling query graph...")
-query_graph = build_query_graph(qa_agent, query_classifier)
+query_graph = build_query_graph(qa_agent, query_classifier, answer_validator)
 
 app = FastAPI(title="Document Knowledge Base API")
 
 
-async def _safe_answer_stream(query: str) -> AsyncGenerator[str, None]:
-    """Stream graph output and sanitize stream-time errors."""
+async def _safe_answer(query: str) -> PlainTextResponse:
+    """Run the buffered graph and return only a complete validated response."""
     try:
-        async for event in query_graph.astream(
-            {"query": query},
-            stream_mode="custom",
-            version="v2",
-        ):
-            if event["type"] == "custom":
-                yield event["data"]
+        result = await query_graph.ainvoke({"query": query})
+        response = result.get("response")
+        if not response:
+            raise RuntimeError("Query graph returned no response")
+        return PlainTextResponse(
+            response,
+            headers={"X-Content-Type-Options": "nosniff"},
+        )
     except Exception:
-        logger.exception("Answer stream failed")
-        yield "\n\n[The answer service is temporarily unavailable.]"
+        logger.exception("Answer request failed")
+        return PlainTextResponse(
+            "[The answer service is temporarily unavailable.]",
+            status_code=503,
+            headers={"X-Content-Type-Options": "nosniff"},
+        )
 
 
-@app.post("/query", response_class=StreamingResponse)
-async def query_documents(request: QueryRequest) -> StreamingResponse:
-    """Stream the grounded final answer for a document question."""
-    return StreamingResponse(
-        _safe_answer_stream(request.query),
-        media_type="text/plain; charset=utf-8",
-        headers={"X-Content-Type-Options": "nosniff"},
-    )
+@app.post("/query", response_class=PlainTextResponse)
+async def query_documents(request: QueryRequest) -> PlainTextResponse:
+    """Return the complete grounded answer and its validation results."""
+    return await _safe_answer(request.query)
 
 
 if __name__ == "__main__":

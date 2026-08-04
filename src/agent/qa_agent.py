@@ -7,8 +7,7 @@ All external dependencies are injected via AgentDeps — no module-level singlet
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from typing import Optional
 
 from pydantic_ai import Agent, RunContext
@@ -21,7 +20,7 @@ from retrieval.fusion import reciprocal_rank_fusion
 from retrieval.reranker import Reranker
 from retrieval.vector_store import VectorStore
 from utils.logging import get_logger
-from utils.models import RetrievedChunk
+from utils.models import EvidenceChunk, QAResult, RetrievedChunk, deduplicate_chunks
 
 logger = get_logger(__name__)
 
@@ -69,6 +68,7 @@ class AgentDeps:
     fusion_top_k: int = 25
     final_top_k: int = 10
     rrf_k: int = 60
+    retrieved_chunks: list[EvidenceChunk] = field(default_factory=list)
 
 
 def build_agent(config: AgentConfig) -> Agent[AgentDeps]:
@@ -139,13 +139,18 @@ def build_agent(config: AgentConfig) -> Agent[AgentDeps]:
             chunks=fused_candidates,
         )
 
+        selected_chunks = reranked[: ctx.deps.final_top_k]
+        ctx.deps.retrieved_chunks.extend(
+            EvidenceChunk.from_retrieved(chunk) for chunk in selected_chunks
+        )
+
         return [
             {
                 "document": chunk.document,
                 "metadata": chunk.metadata,
                 "score": chunk.score,
             }
-            for chunk in reranked[: ctx.deps.final_top_k]
+            for chunk in selected_chunks
         ]
 
     return agent
@@ -182,11 +187,15 @@ class QAAgent:
             rrf_k=settings.agent.rrf_k,
         )
 
-    async def stream_answer(self, query: str) -> AsyncGenerator[str, None]:
-        """Stream only the final answer text after the agent runs its tools."""
-        async with self._agent.run_stream(query, deps=self._deps) as result:
-            async for chunk in result.stream_text(delta=True):
-                yield chunk
+    async def generate_answer(self, query: str) -> QAResult:
+        """Generate a complete answer and capture request-local retrieval evidence."""
+        run_deps = replace(self._deps, retrieved_chunks=[])
+        result = await self._agent.run(query, deps=run_deps)
+
+        return QAResult(
+            answer=result.output,
+            retrieved_chunks=deduplicate_chunks(run_deps.retrieved_chunks),
+        )
 
     @property
     def vector_store(self) -> VectorStore:

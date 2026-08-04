@@ -51,6 +51,11 @@ class ClassifierConfig:
 
 
 @dataclass(frozen=True)
+class ValidatorConfig:
+    model: str = "gpt-5.4-nano"
+
+
+@dataclass(frozen=True)
 class AgentConfig:
     llm_model: str = "openai:gpt-4o-mini"
     temperature: float = 0.0
@@ -80,6 +85,7 @@ class Settings:
     chroma: ChromaConfig = field(default_factory=ChromaConfig)
     reranker: RerankerConfig = field(default_factory=RerankerConfig)
     classifier: ClassifierConfig = field(default_factory=ClassifierConfig)
+    validator: ValidatorConfig = field(default_factory=ValidatorConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
     ingestion: IngestionConfig = field(default_factory=IngestionConfig)
 
@@ -105,6 +111,9 @@ def load_settings() -> Settings:
         ),
         classifier=ClassifierConfig(
             model=os.environ.get("CLASSIFIER_MODEL", "gpt-5.4-nano"),
+        ),
+        validator=ValidatorConfig(
+            model=os.environ.get("VALIDATOR_MODEL", "gpt-5.4-nano"),
         ),
         agent=AgentConfig(
             llm_model=os.environ.get("LLM_MODEL", "openai:gpt-4o-mini"),

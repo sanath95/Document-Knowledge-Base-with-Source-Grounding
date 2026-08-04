@@ -2,7 +2,7 @@
 
 Semorai technical interview task: a PDF knowledge-base QA system that answers questions from indexed documents and cites the source pages used as evidence.
 
-The project builds a retrieval-augmented generation pipeline around local PDF ingestion, persistent vector search, reranking, and a FastAPI streaming API backed by Pydantic-AI. The agent is instructed to answer only from retrieved evidence and to cite sources inline using the format `[pdf_name, page X]`.
+The project builds a retrieval-augmented generation pipeline around local PDF ingestion, persistent vector search, reranking, and a FastAPI API backed by Pydantic-AI. The agent is instructed to answer only from retrieved evidence and to cite sources inline using the format `[pdf_name, page X]`.
 
 ## Features
 
@@ -15,8 +15,9 @@ The project builds a retrieval-augmented generation pipeline around local PDF in
 - Reciprocal Rank Fusion (RRF) of semantic and keyword candidates.
 - Cross-encoder reranking to improve retrieval precision.
 - Tool-less structured query classification for safety and document scope.
-- LangGraph-orchestrated FastAPI endpoint that streams either a grounded answer or a fixed guardrail response.
+- LangGraph-orchestrated FastAPI endpoint that returns either a validated grounded answer or a fixed guardrail response.
 - Source-grounded answers with page-level citations.
+- Schema-constrained faithfulness and context-sufficiency validation.
 
 ## How It Works
 
@@ -44,7 +45,8 @@ flowchart LR
     BM25Search --> RRF
     RRF --> Rerank
     Rerank --> AIAgent
-    AIAgent --> Answer
+    AIAgent --> AnswerValidator
+    AnswerValidator --> Answer
     GuardrailResponse --> Answer
 ```
 
@@ -59,7 +61,7 @@ The architecture separates ingestion, retrieval, reranking, and answering so eac
 - Vector and BM25 search retrieve complementary semantic and keyword candidate
   sets. RRF combines their ranks before the cross-encoder promotes the chunks
   that best match the exact question.
-- Pydantic-AI keeps the agent layer small, while FastAPI exposes a minimal streaming query endpoint.
+- Pydantic-AI keeps the agent layer small, while FastAPI exposes a minimal buffered query endpoint. Answers are held until their evidence validation is complete.
 - Docker separates one-shot ingestion from long-running serving because indexing documents and answering questions have different lifecycles.
 
 ## Project Structure
@@ -73,7 +75,7 @@ src/
   retrieval/    ChromaDB vector store and cross-encoder reranker
   utils/        Logging and shared domain models
 data/           Input PDFs for ingestion
-Dockerfile      Runtime image for the streaming API
+Dockerfile      Runtime image for the buffered API
 Dockerfile.ingest
 docker-compose.yml
 ```
@@ -111,6 +113,7 @@ RERANKER_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
 RERANKER_CACHE_DIR=./hf_models
 RERANKER_THRESHOLD=0.0
 CLASSIFIER_MODEL=gpt-5.4-nano
+VALIDATOR_MODEL=gpt-5.4-nano
 LLM_MODEL=openai:gpt-4o-mini
 LLM_TEMPERATURE=0.0
 DENSE_TOP_K=25
@@ -144,21 +147,34 @@ python src\serve.py
 
 The server starts on `http://localhost:8000` by default. Override `HOST` or `PORT` in the environment if needed.
 
-Send a query and stream the final answer:
+Send a query and receive the complete validated answer:
 
 ```powershell
-curl.exe --no-buffer -X POST http://localhost:8000/query `
+curl.exe -X POST http://localhost:8000/query `
   -H "Content-Type: application/json" `
   -d '{"query":"What are the main findings?"}'
 ```
 
-The endpoint accepts a JSON object with one `query` field and returns the answer as `text/plain`. Invalid requests return a FastAPI validation error. Once streaming starts the HTTP status is already committed, so unexpected agent failures are logged and returned as sanitized error text.
+The endpoint accepts a JSON object with one `query` field and returns the complete answer and validation as `text/plain`. It buffers generation until validation finishes, so unvalidated answer text is never sent. Invalid requests return a FastAPI validation error, and unexpected processing failures return a sanitized service error.
 
 Before the QA agent runs, a separate tool-less classifier returns a structured
 `safety` and `scope` assessment. Only safe, in-scope requests reach the agent.
 Unsafe, ambiguous, and out-of-scope requests receive fixed application-owned
-responses through the same streaming endpoint. If classification fails, the graph
+responses through the same endpoint. If classification fails, the graph
 fails closed and does not invoke the QA agent.
+
+For admitted queries, every chunk returned to the QA agent is captured in
+request-local state and deduplicated by its stable chunk ID. After generation, a
+separate schema-constrained validator receives the original query, the unique
+chunk text and source metadata, and the complete answer. Retrieval and reranker
+scores are deliberately excluded. It returns two boolean checks:
+
+- `faithfulness`: whether every material answer claim is supported by the chunks.
+- `context_sufficiency`: whether the chunks can fully answer the query.
+
+A concise reason is included whenever either result is false. If validation is
+temporarily unavailable, the answer is returned with both results marked
+`unavailable`; the service never fabricates boolean results.
 
 ## Docker Usage
 
@@ -198,7 +214,7 @@ If the indexed documents do not contain enough evidence, the agent should say th
 ## Known Limitations
 
 - OCR is supported for text extraction, but images are skipped; no image embeddings are performed currently.
-- No auth, rate limiting, production monitoring, or formal test suite is currently documented.
+- No auth, rate limiting, or production monitoring is currently included.
 
 ## License
 

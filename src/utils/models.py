@@ -6,6 +6,7 @@ external serialisation is needed).
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -79,3 +80,46 @@ class RetrievedChunk:
 
     def citation(self) -> str:
         return f"[{self.source_pdf}, page {self.page_number}]"
+
+
+@dataclass(frozen=True)
+class EvidenceChunk:
+    """Score-free retrieval evidence safe to expose to the validator."""
+
+    chunk_id: str
+    document: str
+    metadata: dict[str, str | int]
+
+    @classmethod
+    def from_retrieved(cls, chunk: RetrievedChunk) -> "EvidenceChunk":
+        return cls(
+            chunk_id=chunk.chunk_id,
+            document=chunk.document,
+            metadata=dict(chunk.metadata),
+        )
+
+    @property
+    def source_pdf(self) -> str:
+        return str(self.metadata.get("pdf_name", "<unknown>"))
+
+    @property
+    def page_number(self) -> int:
+        return int(self.metadata.get("page_number", 0))
+
+
+@dataclass(frozen=True)
+class QAResult:
+    """A complete generated answer and the unique chunks exposed to the agent."""
+
+    answer: str
+    retrieved_chunks: tuple[EvidenceChunk, ...]
+
+
+def deduplicate_chunks(
+    chunks: Iterable[EvidenceChunk],
+) -> tuple[EvidenceChunk, ...]:
+    """Keep the first occurrence of each stable retrieval chunk ID."""
+    unique: dict[str, EvidenceChunk] = {}
+    for chunk in chunks:
+        unique.setdefault(chunk.chunk_id, chunk)
+    return tuple(unique.values())
