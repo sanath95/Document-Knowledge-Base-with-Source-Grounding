@@ -837,6 +837,7 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "rank-bm25" },
     { name = "sentence-transformers" },
+    { name = "transformers" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -852,6 +853,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "rank-bm25", specifier = ">=0.2.2" },
     { name = "sentence-transformers", specifier = ">=5.4.1" },
+    { name = "transformers", specifier = ">=5.8.0,<6" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.46.0" },
 ]
 

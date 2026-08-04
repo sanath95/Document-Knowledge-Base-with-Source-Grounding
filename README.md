@@ -10,7 +10,7 @@ The project builds a retrieval-augmented generation pipeline around local PDF in
 - OCR-capable text extraction into per-page Markdown.
 - Markdown/header-aware chunking to preserve document structure.
 - OpenAI embeddings for semantic retrieval.
-- BM25 keyword retrieval using the cross-encoder's tokenizer.
+- BM25 keyword retrieval using an independently loaded copy of the cross-encoder tokenizer.
 - ChromaDB persistence for local vector storage.
 - Reciprocal Rank Fusion (RRF) of semantic and keyword candidates.
 - Cross-encoder reranking to improve retrieval precision.

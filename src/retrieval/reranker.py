@@ -79,7 +79,3 @@ class Reranker:
 
         reranked.sort(key=lambda c: c.score, reverse=True)
         return reranked
-
-    def tokenize(self, text: str) -> list[str]:
-        """Tokenize text with the cross-encoder's Hugging Face tokenizer."""
-        return self._model.tokenizer.tokenize(text)

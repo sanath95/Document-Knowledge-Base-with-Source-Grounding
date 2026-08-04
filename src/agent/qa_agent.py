@@ -192,7 +192,8 @@ class QAAgent:
         self._reranker = Reranker(settings.reranker)
         self._bm25_retriever = BM25Retriever(
             collection=self._vector_store.collection,
-            tokenizer=self._reranker.tokenize,
+            tokenizer_model_name=settings.reranker.model_name,
+            tokenizer_cache_dir=settings.reranker.cache_dir,
         )
         self._agent = build_agent(settings.agent)
         self._deps = AgentDeps(

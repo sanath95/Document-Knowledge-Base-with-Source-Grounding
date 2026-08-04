@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-
 import chromadb
 from rank_bm25 import BM25Okapi
+from transformers import AutoTokenizer
 
 from utils.logging import get_logger
 from utils.models import RetrievedChunk
@@ -14,15 +13,19 @@ logger = get_logger(__name__)
 
 
 class BM25Retriever:
-    """Build and query a BM25 index using the cross-encoder tokenizer."""
+    """Build and query a BM25 index using an independently owned tokenizer."""
 
     def __init__(
         self,
         collection: chromadb.Collection,
-        tokenizer: Callable[[str], list[str]],
+        tokenizer_model_name: str,
+        tokenizer_cache_dir: str,
     ) -> None:
         self._collection = collection
-        self._tokenizer = tokenizer
+        self._tokenizer = AutoTokenizer.from_pretrained(
+            tokenizer_model_name,
+            cache_dir=tokenizer_cache_dir,
+        )
         self._chunks: list[RetrievedChunk] = []
         self._token_sets: list[set[str]] = []
         self._index: BM25Okapi | None = None
@@ -46,7 +49,7 @@ class BM25Retriever:
         ]
 
         tokenized_corpus = [
-            self._tokenizer(chunk.document) for chunk in self._chunks
+            self._tokenizer.tokenize(chunk.document) for chunk in self._chunks
         ]
         self._token_sets = [set(tokens) for tokens in tokenized_corpus]
         self._index = BM25Okapi(tokenized_corpus) if tokenized_corpus else None
@@ -62,7 +65,7 @@ class BM25Retriever:
         if self._index is None or top_k <= 0:
             return []
 
-        query_tokens = self._tokenizer(query)
+        query_tokens = self._tokenizer.tokenize(query)
         if not query_tokens:
             return []
 
