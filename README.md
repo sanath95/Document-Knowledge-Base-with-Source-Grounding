@@ -84,6 +84,7 @@ docker-compose.yml
 ## Prerequisites
 
 - Python 3.11 or newer.
+- [uv](https://docs.astral.sh/uv/) for dependency management.
 - An OpenAI API key.
 - PDFs placed in `data/`.
 - Docker and Docker Compose if using the containerized workflow.
@@ -158,24 +159,22 @@ the deployment environment.
 
 ## Local Usage
 
-Install dependencies:
+Install both application pipelines:
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\activate
-pip install -r requirements.txt
+uv sync --all-extras
 ```
 
 Ingest PDFs into the local ChromaDB store:
 
 ```powershell
-python src\ingest.py
+uv run --extra ingest python src\ingest.py
 ```
 
 Start the API:
 
 ```powershell
-python src\serve.py
+uv run --extra serve python src\serve.py
 ```
 
 The server starts on `http://localhost:8000` by default. Override `HOST` or `PORT` in the environment if needed.

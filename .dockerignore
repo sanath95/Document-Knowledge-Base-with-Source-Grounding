@@ -31,5 +31,4 @@ hf_models/
 *.swp
 
 # Local files not needed in image builds
-uv.lock
 .python-version

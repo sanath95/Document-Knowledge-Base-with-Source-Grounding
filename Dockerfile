@@ -1,15 +1,18 @@
+FROM ghcr.io/astral-sh/uv:0.8.17 AS uv
+
 FROM python:3.12-slim AS builder
 
-WORKDIR /build
+COPY --from=uv /uv /uvx /bin/
 
-RUN python -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+WORKDIR /app
 
-COPY requirements.serve.txt .
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir --no-compile -r requirements.serve.txt \
-    && find /opt/venv -type d \( -name test -o -name tests -o -name __pycache__ \) -prune -exec rm -rf {} + \
-    && rm -rf /opt/venv/lib/python3.12/site-packages/torch/test
+ENV UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=never
+
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --extra serve --no-install-project --no-cache \
+    && find /app/.venv -type d \( -name test -o -name tests -o -name __pycache__ \) -prune -exec rm -rf {} + \
+    && rm -rf /app/.venv/lib/python3.12/site-packages/torch/test
 
 
 FROM python:3.12-slim AS runtime
@@ -18,7 +21,7 @@ RUN useradd --create-home --shell /bin/bash appuser
 
 WORKDIR /app
 
-COPY --from=builder /opt/venv /opt/venv
+COPY --from=builder /app/.venv /app/.venv
 
 COPY src/config/      ./src/config/
 COPY src/ingestion/   ./src/ingestion/
@@ -29,12 +32,12 @@ COPY src/utils/       ./src/utils/
 COPY src/serve.py     ./src/serve.py
 
 RUN mkdir -p /data /knowledge_base /app/hf_models \
-    && chown -R appuser:appuser /app /data /knowledge_base
+    && chown -R appuser:appuser /data /knowledge_base /app/hf_models
 
 USER appuser
 
 ENV PYTHONPATH=/app/src \
-    PATH="/opt/venv/bin:$PATH" \
+    PATH="/app/.venv/bin:$PATH" \
     HF_HOME=/app/hf_models \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
