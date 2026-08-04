@@ -11,15 +11,10 @@ import sys
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field, field_validator
 
-from agent.qa_agent import QAAgent
-from config.settings import load_settings
-from orchestration.answer_validator import AnswerValidator
-from orchestration.query_classifier import QueryClassifier
-from orchestration.query_graph import build_query_graph
 from utils.logging import get_logger
 from utils.observability import (
     current_trace_id,
@@ -45,35 +40,50 @@ class QueryRequest(BaseModel):
         return query
 
 
-logger.info("Loading settings...")
-settings = load_settings()
-
-initialise_observability(instrument_pydantic_ai=True)
-
-logger.info("Initialising QA agent...")
-qa_agent = QAAgent(settings)
-
-logger.info("Initialising query safety classifier...")
-query_classifier = QueryClassifier(settings.openai_api_key, settings.classifier)
-
-logger.info("Initialising answer validator...")
-answer_validator = AnswerValidator(settings.openai_api_key, settings.validator)
-
-logger.info("Compiling query graph...")
-query_graph = build_query_graph(qa_agent, query_classifier, answer_validator)
-
-
 @asynccontextmanager
-async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
-    """Flush queued observations when the API process shuts down."""
-    yield
-    shutdown_observability()
+async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
+    """Initialise service dependencies and release them on shutdown."""
+    from agent.qa_agent import QAAgent
+    from config.settings import load_settings
+    from orchestration.answer_validator import AnswerValidator
+    from orchestration.query_classifier import QueryClassifier
+    from orchestration.query_graph import build_query_graph
+
+    logger.info("Loading settings...")
+    settings = load_settings()
+    initialise_observability(instrument_pydantic_ai=True)
+
+    try:
+        logger.info("Initialising QA agent...")
+        qa_agent = QAAgent(settings)
+
+        logger.info("Initialising query safety classifier...")
+        query_classifier = QueryClassifier(
+            settings.openai_api_key,
+            settings.classifier,
+        )
+
+        logger.info("Initialising answer validator...")
+        answer_validator = AnswerValidator(
+            settings.openai_api_key,
+            settings.validator,
+        )
+
+        logger.info("Compiling query graph...")
+        app.state.query_graph = build_query_graph(
+            qa_agent,
+            query_classifier,
+            answer_validator,
+        )
+        yield
+    finally:
+        shutdown_observability()
 
 
 app = FastAPI(title="Document Knowledge Base API", lifespan=lifespan)
 
 
-async def _safe_answer(query: str) -> PlainTextResponse:
+async def _safe_answer(query: str, app: FastAPI) -> PlainTextResponse:
     """Run the buffered graph and return only a complete validated response."""
     with observation(
         name="kb.query",
@@ -86,7 +96,7 @@ async def _safe_answer(query: str) -> PlainTextResponse:
             headers["X-Langfuse-Trace-Id"] = trace_id
 
         try:
-            result = await query_graph.ainvoke({"query": query})
+            result = await app.state.query_graph.ainvoke({"query": query})
             response = result.get("response")
             if not response:
                 raise RuntimeError("Query graph returned no response")
@@ -146,9 +156,12 @@ async def _safe_answer(query: str) -> PlainTextResponse:
 
 
 @app.post("/query", response_class=PlainTextResponse)
-async def query_documents(request: QueryRequest) -> PlainTextResponse:
+async def query_documents(
+    request: Request,
+    payload: QueryRequest,
+) -> PlainTextResponse:
     """Return the complete grounded answer and its validation results."""
-    return await _safe_answer(request.query)
+    return await _safe_answer(payload.query, request.app)
 
 
 if __name__ == "__main__":
