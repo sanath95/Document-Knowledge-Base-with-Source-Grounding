@@ -26,18 +26,14 @@ def tracing_enabled() -> bool:
     return configured
 
 
-def initialise_observability(*, instrument_pydantic_ai: bool = False) -> None:
-    """Initialise Langfuse and optionally enable Pydantic-AI instrumentation."""
+def initialise_observability() -> None:
+    """Initialise Langfuse when tracing is configured."""
     global _initialised
     if _initialised or not tracing_enabled():
         return
 
     try:
         get_client()
-        if instrument_pydantic_ai:
-            from pydantic_ai import Agent
-
-            Agent.instrument_all()
         _initialised = True
         logger.info("Langfuse observability enabled")
     except Exception:

@@ -51,7 +51,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     logger.info("Loading settings...")
     settings = load_settings()
-    initialise_observability(instrument_pydantic_ai=True)
+    initialise_observability()
 
     try:
         logger.info("Initialising QA agent...")
