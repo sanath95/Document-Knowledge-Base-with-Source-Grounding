@@ -18,11 +18,8 @@ from retrieval.bm25_retriever import BM25Retriever
 from retrieval.fusion import reciprocal_rank_fusion
 from retrieval.reranker import Reranker
 from retrieval.vector_store import VectorStore
-from utils.logging import get_logger
 from utils.models import EvidenceChunk, QAResult, RetrievedChunk, deduplicate_chunks
 from utils.observability import observation, tracing_enabled
-
-logger = get_logger(__name__)
 
 _AGENT_INSTRUCTIONS = """
 You are a retrieval-augmented document QA agent.
@@ -59,6 +56,7 @@ Answer style:
 @dataclass
 class AgentDeps:
     """All runtime dependencies required by the agent's tools."""
+
     vector_store: VectorStore
     embedder: Embedder
     reranker: Reranker
@@ -194,23 +192,27 @@ class QAAgent:
         self._vector_store = VectorStore(settings.chroma)
         self._embedder = Embedder(settings.openai_api_key, settings.embedding)
         self._reranker = Reranker(settings.reranker)
-        self._bm25_retriever = BM25Retriever(
-            collection=self._vector_store.collection,
-            tokenizer_model_name=settings.reranker.model_name,
-            tokenizer_cache_dir=settings.reranker.cache_dir,
-        )
-        self._agent = build_agent(settings.agent)
-        self._deps = AgentDeps(
-            vector_store=self._vector_store,
-            embedder=self._embedder,
-            reranker=self._reranker,
-            bm25_retriever=self._bm25_retriever,
-            dense_top_k=settings.agent.dense_top_k,
-            bm25_top_k=settings.agent.bm25_top_k,
-            fusion_top_k=settings.agent.fusion_top_k,
-            final_top_k=settings.agent.final_top_k,
-            rrf_k=settings.agent.rrf_k,
-        )
+        try:
+            self._bm25_retriever = BM25Retriever(
+                collection=self._vector_store.collection,
+                tokenizer_model_name=settings.reranker.model_name,
+                tokenizer_cache_dir=settings.reranker.cache_dir,
+            )
+            self._agent = build_agent(settings.agent)
+            self._deps = AgentDeps(
+                vector_store=self._vector_store,
+                embedder=self._embedder,
+                reranker=self._reranker,
+                bm25_retriever=self._bm25_retriever,
+                dense_top_k=settings.agent.dense_top_k,
+                bm25_top_k=settings.agent.bm25_top_k,
+                fusion_top_k=settings.agent.fusion_top_k,
+                final_top_k=settings.agent.final_top_k,
+                rrf_k=settings.agent.rrf_k,
+            )
+        except Exception:
+            self._reranker.close()
+            raise
 
     async def generate_answer(self, query: str) -> QAResult:
         """Generate a complete answer and capture request-local retrieval evidence."""
@@ -222,7 +224,6 @@ class QAAgent:
             retrieved_chunks=deduplicate_chunks(run_deps.retrieved_chunks),
         )
 
-    @property
-    def vector_store(self) -> VectorStore:
-        """Expose VectorStore so the ingestion pipeline can share it."""
-        return self._vector_store
+    def close(self) -> None:
+        """Release resources owned by the agent."""
+        self._reranker.close()

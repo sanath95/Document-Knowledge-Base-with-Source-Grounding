@@ -9,14 +9,14 @@ reduces wall-clock time when embedding large corpora.
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from openai import AsyncOpenAI
 
 from config.settings import EmbeddingConfig
-from utils.logging import get_logger
 from utils.observability import observation, openai_usage_details
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class Embedder:

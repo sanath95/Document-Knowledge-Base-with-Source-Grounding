@@ -12,19 +12,21 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import logging
 import sys
 
 from config.settings import load_settings
 from ingestion.pipeline import IngestionPipeline
 from retrieval.vector_store import VectorStore
-from utils.logging import get_logger
+from utils.logging import configure_logging
 from utils.observability import (
     flush_observability,
     initialise_observability,
     observation,
 )
 
-logger = get_logger(__name__)
+configure_logging()
+logger = logging.getLogger(__name__)
 
 
 async def main() -> None:

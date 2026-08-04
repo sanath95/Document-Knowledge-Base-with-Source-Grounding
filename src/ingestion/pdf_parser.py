@@ -7,14 +7,14 @@ Stateless — create once, call parse() as many times as needed.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pymupdf4llm
 
-from utils.logging import get_logger
 from utils.models import DocumentChunk, PageContent
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class PDFParser:

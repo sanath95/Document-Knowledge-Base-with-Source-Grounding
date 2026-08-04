@@ -6,6 +6,7 @@ Usage:
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from collections.abc import AsyncGenerator
@@ -15,7 +16,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field, field_validator
 
-from utils.logging import get_logger
+from utils.logging import configure_logging
 from utils.observability import (
     current_trace_id,
     initialise_observability,
@@ -23,7 +24,8 @@ from utils.observability import (
     shutdown_observability,
 )
 
-logger = get_logger(__name__)
+configure_logging()
+logger = logging.getLogger(__name__)
 
 
 class QueryRequest(BaseModel):
@@ -52,6 +54,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     logger.info("Loading settings...")
     settings = load_settings()
     initialise_observability()
+    qa_agent: QAAgent | None = None
 
     try:
         logger.info("Initialising QA agent...")
@@ -77,6 +80,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         )
         yield
     finally:
+        if qa_agent is not None:
+            qa_agent.close()
         shutdown_observability()
 
 

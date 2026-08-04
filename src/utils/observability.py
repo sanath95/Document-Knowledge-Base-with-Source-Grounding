@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -9,9 +10,7 @@ from typing import Any
 
 from langfuse import get_client
 
-from utils.logging import get_logger
-
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 _initialised = False
 
@@ -19,10 +18,9 @@ _initialised = False
 def tracing_enabled() -> bool:
     """Return whether Langfuse tracing is configured and enabled."""
     configured = bool(
-        os.environ.get("LANGFUSE_PUBLIC_KEY")
-        and os.environ.get("LANGFUSE_SECRET_KEY")
+        os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_SECRET_KEY")
     )
-    
+
     return configured
 
 

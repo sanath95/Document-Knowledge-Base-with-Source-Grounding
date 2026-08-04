@@ -68,9 +68,7 @@ class QueryClassifier:
             )
             assessment = response.output_parsed
             if assessment is None:
-                raise RuntimeError(
-                    "Query classifier returned no structured assessment"
-                )
+                raise RuntimeError("Query classifier returned no structured assessment")
             if generation is not None:
                 generation.update(
                     output=assessment.model_dump(),

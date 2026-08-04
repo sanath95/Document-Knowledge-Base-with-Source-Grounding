@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import logging
+
 import chromadb
 from rank_bm25 import BM25Okapi
 from transformers import AutoTokenizer
 
-from utils.logging import get_logger
 from utils.models import RetrievedChunk
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class BM25Retriever:

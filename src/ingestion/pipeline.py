@@ -7,6 +7,7 @@ Async where it benefits (batched embedding), sync otherwise.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,10 +16,9 @@ from ingestion.chunker import MarkdownChunker
 from ingestion.embedder import Embedder
 from ingestion.pdf_parser import PDFParser
 from retrieval.vector_store import VectorStore
-from utils.logging import get_logger
 from utils.models import DocumentChunk
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -70,9 +70,7 @@ class IngestionPipeline:
         if not pdf_files:
             raise FileNotFoundError(f"No PDF files found in: {folder}")
 
-        logger.info(
-            "Found %d PDF(s) in '%s'", len(pdf_files), folder
-        )
+        logger.info("Found %d PDF(s) in '%s'", len(pdf_files), folder)
 
         total_chunks = 0
         failed: list[str] = []
@@ -98,18 +96,6 @@ class IngestionPipeline:
             chunk_count=total_chunks,
             failed_files=tuple(failed),
         )
-
-    async def ingest_file(self, pdf_path: Path) -> int:
-        """
-        Ingest a single PDF file.
-
-        Args:
-            pdf_path: Path to the PDF.
-
-        Returns:
-            Number of chunks stored.
-        """
-        return await self._ingest_pdf(pdf_path)
 
     # ── Private ───────────────────────────────────────────────────────────────
 

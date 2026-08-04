@@ -7,15 +7,14 @@ Handles collection lifecycle, upsert, and vector query.
 
 from __future__ import annotations
 
-from collections import defaultdict
+import logging
 
 import chromadb
 
 from config.settings import ChromaConfig
-from utils.logging import get_logger
 from utils.models import DocumentChunk, RetrievedChunk
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class VectorStore:

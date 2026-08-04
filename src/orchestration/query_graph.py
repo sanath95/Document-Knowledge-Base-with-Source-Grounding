@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Literal, NotRequired, Protocol, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
 from orchestration.answer_validator import AnswerValidation
 from orchestration.query_classifier import QuerySafetyAssessment
-from utils.logging import get_logger
 from utils.models import EvidenceChunk, QAResult
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 _UNSAFE_RESPONSE = (
     "I can't help with that request. You can ask a question about the indexed "
@@ -56,7 +56,6 @@ class QueryState(TypedDict):
     validation: NotRequired[AnswerValidation]
     validation_failed: NotRequired[bool]
     response: NotRequired[str]
-    completed: NotRequired[bool]
 
 
 def build_query_graph(
@@ -98,11 +97,9 @@ def build_query_graph(
             elif safety_assessment.safety == "unsafe":
                 response = _UNSAFE_RESPONSE
             else:
-                raise RuntimeError(
-                    "Safe query was routed to the guardrail response"
-                )
+                raise RuntimeError("Safe query was routed to the guardrail response")
 
-        return {"response": response, "completed": True}
+        return {"response": response}
 
     async def run_qa_agent(state: QueryState) -> dict:
         result = await answer_generator.generate_answer(state["query"])
@@ -143,9 +140,7 @@ def build_query_graph(
                 f"{str(validation.faithfulness).lower()}",
             ]
             if not validation.faithfulness:
-                lines.append(
-                    f"- Faithfulness reason: {validation.faithfulness_reason}"
-                )
+                lines.append(f"- Faithfulness reason: {validation.faithfulness_reason}")
 
             lines.append(
                 "- Context sufficient to fully answer the query: "
@@ -160,7 +155,6 @@ def build_query_graph(
 
         return {
             "response": f"{answer}\n\n{validation_text}",
-            "completed": True,
         }
 
     builder = StateGraph(QueryState)

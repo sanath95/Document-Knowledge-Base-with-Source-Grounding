@@ -127,9 +127,7 @@ class AnswerValidator:
             )
             validation = response.output_parsed
             if validation is None:
-                raise RuntimeError(
-                    "Answer validator returned no structured assessment"
-                )
+                raise RuntimeError("Answer validator returned no structured assessment")
             if generation is not None:
                 generation.update(
                     output=validation.model_dump(),
