@@ -1,7 +1,7 @@
 """
 QAAgent
 ───────
-Pydantic-AI agent wired with retrieve_and_rerank and list_documents tools.
+Pydantic-AI agent wired with the retrieve_and_rerank tool.
 All external dependencies are injected via AgentDeps — no module-level singletons.
 """
 
@@ -21,7 +21,7 @@ from retrieval.fusion import reciprocal_rank_fusion
 from retrieval.reranker import Reranker
 from retrieval.vector_store import VectorStore
 from utils.logging import get_logger
-from utils.models import DocumentIndex, RetrievedChunk
+from utils.models import RetrievedChunk
 
 logger = get_logger(__name__)
 
@@ -42,13 +42,6 @@ Retrieval strategy:
 - Prefer multiple targeted searches over one broad search.
 - Retry retrieval with reformulated queries only if evidence is weak or irrelevant.
 - Stop retrieving once sufficient evidence is collected.
-
-Document selection:
-- Use list_documents when:
-  - the user asks what documents are available,
-  - the document reference is ambiguous,
-  - the user asks about a specific document that may not exist,
-  - or the user asks for comparisons between documents.
 
 Grounding rules:
 - Never use outside knowledge.
@@ -99,25 +92,6 @@ def build_agent(config: AgentConfig) -> Agent[AgentDeps]:
             parallel_tool_calls=config.parallel_tool_calls,
         ),
     )
-
-    @agent.tool
-    def list_documents(ctx: RunContext[AgentDeps]) -> list[dict]:
-        """
-        List all indexed PDF documents in the knowledge base.
-
-        Use this tool when:
-        - the user asks what documents are available,
-        - a document name is ambiguous,
-        - retrieval should be scoped to a specific document,
-        - or the user asks for comparisons between documents.
-
-        Returns a list of dicts with 'pdf_name' and 'chunks'.
-        """
-        documents: list[DocumentIndex] = ctx.deps.vector_store.list_documents()
-        return [
-            {"pdf_name": doc.pdf_name, "chunks": doc.chunk_count}
-            for doc in documents
-        ]
 
     @agent.tool
     async def retrieve_and_rerank(

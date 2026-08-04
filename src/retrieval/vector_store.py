@@ -13,7 +13,7 @@ import chromadb
 
 from config.settings import ChromaConfig
 from utils.logging import get_logger
-from utils.models import DocumentChunk, DocumentIndex, RetrievedChunk
+from utils.models import DocumentChunk, RetrievedChunk
 
 logger = get_logger(__name__)
 
@@ -108,25 +108,6 @@ class VectorStore:
                 score=0.0,
             )
             for chunk_id, doc, meta in zip(ids, docs, metadatas)
-        ]
-
-    def list_documents(self) -> list[DocumentIndex]:
-        """
-        Return a summary of all indexed PDFs and their chunk counts.
-
-        Returns:
-            Alphabetically sorted list of DocumentIndex objects.
-        """
-        result = self._collection.get(include=["metadatas"])
-        counts: dict[str, int] = defaultdict(int)
-
-        for meta in result.get("metadatas") or []:
-            pdf_name: str = (meta or {}).get("pdf_name", "<unknown>")
-            counts[pdf_name] += 1
-
-        return [
-            DocumentIndex(pdf_name=name, chunk_count=count)
-            for name, count in sorted(counts.items())
         ]
 
     @property

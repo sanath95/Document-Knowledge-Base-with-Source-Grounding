@@ -79,10 +79,3 @@ class RetrievedChunk:
 
     def citation(self) -> str:
         return f"[{self.source_pdf}, page {self.page_number}]"
-
-
-@dataclass
-class DocumentIndex:
-    """Summary of all chunks belonging to a single PDF in the store."""
-    pdf_name: str
-    chunk_count: int
