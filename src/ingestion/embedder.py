@@ -14,6 +14,7 @@ from openai import AsyncOpenAI
 
 from config.settings import EmbeddingConfig
 from utils.logging import get_logger
+from utils.observability import observation, openai_usage_details
 
 logger = get_logger(__name__)
 
@@ -79,15 +80,34 @@ class Embedder:
     async def _embed_batch(
         self, batch: list[str], batch_index: int
     ) -> list[list[float]]:
-        try:
-            response = await self._client.embeddings.create(
-                input=batch, model=self._config.model
-            )
-        except Exception as exc:
-            raise RuntimeError(
-                f"OpenAI embedding request failed (batch {batch_index}): {exc}"
-            ) from exc
+        with observation(
+            name="openai.embedding",
+            as_type="embedding",
+            input={
+                "batch_index": batch_index,
+                "text_count": len(batch),
+                "character_count": sum(len(text) for text in batch),
+            },
+            model=self._config.model,
+        ) as embedding_observation:
+            try:
+                response = await self._client.embeddings.create(
+                    input=batch, model=self._config.model
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"OpenAI embedding request failed (batch {batch_index}): {exc}"
+                ) from exc
 
-        # response.data is ordered by index field — sort defensively
-        sorted_data = sorted(response.data, key=lambda item: item.index)
-        return [item.embedding for item in sorted_data]
+            # response.data is ordered by index field — sort defensively
+            sorted_data = sorted(response.data, key=lambda item: item.index)
+            embeddings = [item.embedding for item in sorted_data]
+            if embedding_observation is not None:
+                embedding_observation.update(
+                    output={
+                        "embedding_count": len(embeddings),
+                        "dimensions": len(embeddings[0]) if embeddings else 0,
+                    },
+                    usage_details=openai_usage_details(response.usage),
+                )
+            return embeddings

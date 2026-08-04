@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 from config.settings import ValidatorConfig
 from utils.models import EvidenceChunk
+from utils.observability import observation, openai_usage_details
 
 
 _VALIDATOR_INSTRUCTIONS = """
@@ -98,15 +99,40 @@ class AnswerValidator:
             ],
             "answer": answer,
         }
-        response = await self._client.responses.parse(
+        observation_input = {
+            "query": query,
+            "answer": answer,
+            "retrieved_chunks": [
+                {
+                    "chunk_id": chunk.chunk_id,
+                    "source_pdf": chunk.source_pdf,
+                    "page_number": chunk.page_number,
+                }
+                for chunk in retrieved_chunks
+            ],
+        }
+        with observation(
+            name="answer.validate",
+            as_type="generation",
+            input=observation_input,
             model=self._config.model,
-            instructions=_VALIDATOR_INSTRUCTIONS,
-            input=json.dumps(payload, ensure_ascii=False),
-            text_format=AnswerValidation,
-            max_output_tokens=512,
-            store=False,
-        )
-        validation = response.output_parsed
-        if validation is None:
-            raise RuntimeError("Answer validator returned no structured assessment")
-        return validation
+        ) as generation:
+            response = await self._client.responses.parse(
+                model=self._config.model,
+                instructions=_VALIDATOR_INSTRUCTIONS,
+                input=json.dumps(payload, ensure_ascii=False),
+                text_format=AnswerValidation,
+                max_output_tokens=512,
+                store=False,
+            )
+            validation = response.output_parsed
+            if validation is None:
+                raise RuntimeError(
+                    "Answer validator returned no structured assessment"
+                )
+            if generation is not None:
+                generation.update(
+                    output=validation.model_dump(),
+                    usage_details=openai_usage_details(response.usage),
+                )
+            return validation

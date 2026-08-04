@@ -21,6 +21,7 @@ from retrieval.reranker import Reranker
 from retrieval.vector_store import VectorStore
 from utils.logging import get_logger
 from utils.models import EvidenceChunk, QAResult, RetrievedChunk, deduplicate_chunks
+from utils.observability import observation, tracing_enabled
 
 logger = get_logger(__name__)
 
@@ -91,6 +92,7 @@ def build_agent(config: AgentConfig) -> Agent[AgentDeps]:
             temperature=config.temperature,
             parallel_tool_calls=config.parallel_tool_calls,
         ),
+        instrument=tracing_enabled(),
     )
 
     @agent.tool
@@ -115,43 +117,76 @@ def build_agent(config: AgentConfig) -> Agent[AgentDeps]:
         Returns a hybrid-reranked list of chunks with 'document', 'metadata',
         and cross-encoder 'score'.
         """
-        query_embedding = await ctx.deps.embedder.embed_one(search_query)
+        with observation(
+            name="retrieve_and_rerank",
+            as_type="retriever",
+            input={"search_query": search_query, "filters": filters},
+            metadata={
+                "dense_top_k": ctx.deps.dense_top_k,
+                "bm25_top_k": ctx.deps.bm25_top_k,
+                "fusion_top_k": ctx.deps.fusion_top_k,
+                "final_top_k": ctx.deps.final_top_k,
+            },
+        ) as retrieval_observation:
+            query_embedding = await ctx.deps.embedder.embed_one(search_query)
 
-        dense_candidates: list[RetrievedChunk] = ctx.deps.vector_store.query(
-            query_embedding=query_embedding,
-            top_k=ctx.deps.dense_top_k,
-            filters=filters,
-        )
+            dense_candidates: list[RetrievedChunk] = ctx.deps.vector_store.query(
+                query_embedding=query_embedding,
+                top_k=ctx.deps.dense_top_k,
+                filters=filters,
+            )
 
-        sparse_candidates: list[RetrievedChunk] = ctx.deps.bm25_retriever.query(
-            query=search_query,
-            top_k=ctx.deps.bm25_top_k,
-            filters=filters,
-        )
+            sparse_candidates: list[RetrievedChunk] = ctx.deps.bm25_retriever.query(
+                query=search_query,
+                top_k=ctx.deps.bm25_top_k,
+                filters=filters,
+            )
 
-        fused_candidates: list[RetrievedChunk] = reciprocal_rank_fusion(
-            [dense_candidates, sparse_candidates],
-            rrf_k=ctx.deps.rrf_k,
-        )[: ctx.deps.fusion_top_k]
+            fused_candidates: list[RetrievedChunk] = reciprocal_rank_fusion(
+                [dense_candidates, sparse_candidates],
+                rrf_k=ctx.deps.rrf_k,
+            )[: ctx.deps.fusion_top_k]
 
-        reranked: list[RetrievedChunk] = await ctx.deps.reranker.rerank(
-            query=search_query,
-            chunks=fused_candidates,
-        )
+            reranked: list[RetrievedChunk] = await ctx.deps.reranker.rerank(
+                query=search_query,
+                chunks=fused_candidates,
+            )
 
-        selected_chunks = reranked[: ctx.deps.final_top_k]
-        ctx.deps.retrieved_chunks.extend(
-            EvidenceChunk.from_retrieved(chunk) for chunk in selected_chunks
-        )
+            selected_chunks = reranked[: ctx.deps.final_top_k]
+            ctx.deps.retrieved_chunks.extend(
+                EvidenceChunk.from_retrieved(chunk) for chunk in selected_chunks
+            )
 
-        return [
-            {
-                "document": chunk.document,
-                "metadata": chunk.metadata,
-                "score": chunk.score,
-            }
-            for chunk in selected_chunks
-        ]
+            if retrieval_observation is not None:
+                retrieval_observation.update(
+                    output={
+                        "candidate_counts": {
+                            "dense": len(dense_candidates),
+                            "bm25": len(sparse_candidates),
+                            "fused": len(fused_candidates),
+                            "reranked": len(reranked),
+                            "selected": len(selected_chunks),
+                        },
+                        "selected_chunks": [
+                            {
+                                "chunk_id": chunk.chunk_id,
+                                "source_pdf": chunk.source_pdf,
+                                "page_number": chunk.page_number,
+                                "reranker_score": chunk.score,
+                            }
+                            for chunk in selected_chunks
+                        ],
+                    }
+                )
+
+            return [
+                {
+                    "document": chunk.document,
+                    "metadata": chunk.metadata,
+                    "score": chunk.score,
+                }
+                for chunk in selected_chunks
+            ]
 
     return agent
 

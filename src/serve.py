@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import os
 import sys
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.responses import PlainTextResponse
@@ -19,6 +21,12 @@ from orchestration.answer_validator import AnswerValidator
 from orchestration.query_classifier import QueryClassifier
 from orchestration.query_graph import build_query_graph
 from utils.logging import get_logger
+from utils.observability import (
+    current_trace_id,
+    initialise_observability,
+    observation,
+    shutdown_observability,
+)
 
 logger = get_logger(__name__)
 
@@ -40,6 +48,8 @@ class QueryRequest(BaseModel):
 logger.info("Loading settings...")
 settings = load_settings()
 
+initialise_observability(instrument_pydantic_ai=True)
+
 logger.info("Initialising QA agent...")
 qa_agent = QAAgent(settings)
 
@@ -52,27 +62,87 @@ answer_validator = AnswerValidator(settings.openai_api_key, settings.validator)
 logger.info("Compiling query graph...")
 query_graph = build_query_graph(qa_agent, query_classifier, answer_validator)
 
-app = FastAPI(title="Document Knowledge Base API")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
+    """Flush queued observations when the API process shuts down."""
+    yield
+    shutdown_observability()
+
+
+app = FastAPI(title="Document Knowledge Base API", lifespan=lifespan)
 
 
 async def _safe_answer(query: str) -> PlainTextResponse:
     """Run the buffered graph and return only a complete validated response."""
-    try:
-        result = await query_graph.ainvoke({"query": query})
-        response = result.get("response")
-        if not response:
-            raise RuntimeError("Query graph returned no response")
-        return PlainTextResponse(
-            response,
-            headers={"X-Content-Type-Options": "nosniff"},
-        )
-    except Exception:
-        logger.exception("Answer request failed")
-        return PlainTextResponse(
-            "[The answer service is temporarily unavailable.]",
-            status_code=503,
-            headers={"X-Content-Type-Options": "nosniff"},
-        )
+    with observation(
+        name="kb.query",
+        input={"query": query},
+        metadata={"endpoint": "/query"},
+    ) as root_observation:
+        trace_id = current_trace_id()
+        headers = {"X-Content-Type-Options": "nosniff"}
+        if trace_id:
+            headers["X-Langfuse-Trace-Id"] = trace_id
+
+        try:
+            result = await query_graph.ainvoke({"query": query})
+            response = result.get("response")
+            if not response:
+                raise RuntimeError("Query graph returned no response")
+
+            if result.get("classification_failed"):
+                outcome = "classification_failed"
+            else:
+                safety_assessment = result.get("safety_assessment")
+                if (
+                    safety_assessment is not None
+                    and safety_assessment.safety == "unsafe"
+                ):
+                    outcome = "guardrailed"
+                elif result.get("validation_failed"):
+                    outcome = "validation_unavailable"
+                else:
+                    outcome = "success"
+
+            validation = result.get("validation")
+            if root_observation is not None:
+                root_observation.update(
+                    output={"response": response, "outcome": outcome}
+                )
+                if outcome in {"classification_failed", "validation_unavailable"}:
+                    root_observation.update(
+                        level="WARNING",
+                        status_message=outcome,
+                    )
+                if validation is not None and not result.get("validation_failed"):
+                    root_observation.score_trace(
+                        name="faithfulness",
+                        value=1 if validation.faithfulness else 0,
+                        data_type="BOOLEAN",
+                        comment=validation.faithfulness_reason,
+                    )
+                    root_observation.score_trace(
+                        name="context_sufficiency",
+                        value=1 if validation.context_sufficiency else 0,
+                        data_type="BOOLEAN",
+                        comment=validation.context_sufficiency_reason,
+                    )
+
+            return PlainTextResponse(response, headers=headers)
+        except Exception as exc:
+            logger.exception("Answer request failed")
+            if root_observation is not None:
+                root_observation.update(
+                    output={"outcome": "failed"},
+                    level="ERROR",
+                    status_message=type(exc).__name__,
+                )
+            return PlainTextResponse(
+                "[The answer service is temporarily unavailable.]",
+                status_code=503,
+                headers=headers,
+            )
 
 
 @app.post("/query", response_class=PlainTextResponse)

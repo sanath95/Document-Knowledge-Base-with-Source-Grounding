@@ -7,6 +7,7 @@ Async where it benefits (batched embedding), sync otherwise.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from config.settings import Settings
@@ -18,6 +19,16 @@ from utils.logging import get_logger
 from utils.models import DocumentChunk
 
 logger = get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class IngestionSummary:
+    """Small observable summary of a completed folder ingestion run."""
+
+    document_count: int
+    successful_document_count: int
+    chunk_count: int
+    failed_files: tuple[str, ...]
 
 
 class IngestionPipeline:
@@ -36,13 +47,16 @@ class IngestionPipeline:
         self._chunker = MarkdownChunker(settings.ingestion)
         self._embedder = Embedder(settings.openai_api_key, settings.embedding)
 
-    async def run(self) -> None:
+    async def run(self) -> IngestionSummary:
         """
         Discover PDFs in the configured folder and ingest each one.
 
         Raises:
             NotADirectoryError: If the PDF folder does not exist.
             FileNotFoundError:  If no PDFs are found.
+
+        Returns:
+            Counts and failed filenames for logging and observability.
         """
         folder = self._settings.ingestion.pdf_folder
         if not folder.is_dir():
@@ -77,6 +91,12 @@ class IngestionPipeline:
             total_chunks,
             len(pdf_files) - len(failed),
             failed or "none",
+        )
+        return IngestionSummary(
+            document_count=len(pdf_files),
+            successful_document_count=len(pdf_files) - len(failed),
+            chunk_count=total_chunks,
+            failed_files=tuple(failed),
         )
 
     async def ingest_file(self, pdf_path: Path) -> int:

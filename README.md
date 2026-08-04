@@ -18,6 +18,7 @@ The project builds a retrieval-augmented generation pipeline around local PDF in
 - LangGraph-orchestrated FastAPI endpoint that returns either a validated grounded answer or a fixed guardrail response.
 - Source-grounded answers with page-level citations.
 - Schema-constrained faithfulness and context-sufficiency validation.
+- Langfuse Cloud traces for query, retrieval, model usage, validation, and ingestion.
 
 ## How It Works
 
@@ -101,6 +102,17 @@ Required:
 OPENAI_API_KEY=sk-...
 ```
 
+Langfuse Cloud observability is optional and activates when credentials are
+present. The endpoint below uses the EU region:
+
+```env
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_BASE_URL=https://cloud.langfuse.com
+LANGFUSE_TRACING_ENABLED=true
+LANGFUSE_TRACING_ENVIRONMENT=development
+```
+
 Common optional settings:
 
 ```env
@@ -122,6 +134,27 @@ FUSION_TOP_K=25
 FINAL_TOP_K=10
 RRF_K=60
 ```
+
+## Observability
+
+Each `/query` request creates one `kb.query` trace. It contains the safety
+classification, the automatically instrumented Pydantic-AI agent and its model
+and tool calls, one aggregate `retrieve_and_rerank` observation, the answer
+validator, and the final request outcome. Successful validation adds boolean
+`faithfulness` and `context_sufficiency` scores to the trace. The response also
+includes `X-Langfuse-Trace-Id` when tracing is active.
+
+The ingestion command creates one `kb.ingestion` trace with document, chunk,
+and failure counts. Embedding calls record batch sizes, dimensions, token usage,
+and cost metadata, but never embedding vectors. Retrieval observations record
+selected chunk IDs, source pages, and reranker scores rather than duplicating
+document text.
+
+Tracing is fail-open: missing Langfuse credentials or exporter failures do not
+change API results. Set `LANGFUSE_TRACING_ENABLED=false` to disable it explicitly.
+Model and tool instrumentation may include user queries, answers, and retrieved
+chunk text, so only enable Cloud tracing when that content is permitted to leave
+the deployment environment.
 
 ## Local Usage
 
@@ -216,7 +249,7 @@ If the indexed documents do not contain enough evidence, the agent should say th
 ## Known Limitations
 
 - OCR is supported for text extraction, but images are skipped; no image embeddings are performed currently.
-- No auth, rate limiting, or production monitoring is currently included.
+- No auth or rate limiting is currently included.
 
 ## License
 

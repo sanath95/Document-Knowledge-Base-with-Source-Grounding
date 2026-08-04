@@ -1,5 +1,6 @@
 chromadb==1.5.9
 langchain-text-splitters==1.1.2
+langfuse==4.14.2
 openai==2.36.0
 pymupdf4llm==1.27.2.3
 python-dotenv==1.2.2

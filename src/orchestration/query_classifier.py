@@ -8,6 +8,7 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel, ConfigDict
 
 from config.settings import ClassifierConfig
+from utils.observability import observation, openai_usage_details
 
 
 _CLASSIFIER_INSTRUCTIONS = """
@@ -51,15 +52,28 @@ class QueryClassifier:
 
     async def classify(self, query: str) -> QuerySafetyAssessment:
         """Return a schema-validated safety assessment."""
-        response = await self._client.responses.parse(
+        with observation(
+            name="safety.classify",
+            as_type="generation",
+            input={"query": query},
             model=self._config.model,
-            instructions=_CLASSIFIER_INSTRUCTIONS,
-            input=query,
-            text_format=QuerySafetyAssessment,
-            max_output_tokens=128,
-            store=False,
-        )
-        assessment = response.output_parsed
-        if assessment is None:
-            raise RuntimeError("Query classifier returned no structured assessment")
-        return assessment
+        ) as generation:
+            response = await self._client.responses.parse(
+                model=self._config.model,
+                instructions=_CLASSIFIER_INSTRUCTIONS,
+                input=query,
+                text_format=QuerySafetyAssessment,
+                max_output_tokens=128,
+                store=False,
+            )
+            assessment = response.output_parsed
+            if assessment is None:
+                raise RuntimeError(
+                    "Query classifier returned no structured assessment"
+                )
+            if generation is not None:
+                generation.update(
+                    output=assessment.model_dump(),
+                    usage_details=openai_usage_details(response.usage),
+                )
+            return assessment
