@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from agent.qa_agent import QAAgent
 from config.settings import load_settings
+from orchestration.query_classifier import QueryClassifier
 from orchestration.query_graph import build_query_graph
 from utils.logging import get_logger
 
@@ -42,8 +43,11 @@ settings = load_settings()
 logger.info("Initialising QA agent...")
 qa_agent = QAAgent(settings)
 
+logger.info("Initialising query classifier...")
+query_classifier = QueryClassifier(settings.openai_api_key, settings.classifier)
+
 logger.info("Compiling query graph...")
-query_graph = build_query_graph(qa_agent)
+query_graph = build_query_graph(qa_agent, query_classifier)
 
 app = FastAPI(title="Document Knowledge Base API")
 

@@ -14,7 +14,8 @@ The project builds a retrieval-augmented generation pipeline around local PDF in
 - ChromaDB persistence for local vector storage.
 - Reciprocal Rank Fusion (RRF) of semantic and keyword candidates.
 - Cross-encoder reranking to improve retrieval precision.
-- LangGraph-orchestrated FastAPI endpoint that streams the Pydantic-AI agent's final answer.
+- Tool-less structured query classification for safety and document scope.
+- LangGraph-orchestrated FastAPI endpoint that streams either a grounded answer or a fixed guardrail response.
 - Source-grounded answers with page-level citations.
 
 ## How It Works
@@ -32,7 +33,9 @@ flowchart LR
 ```mermaid
 flowchart LR
     UserQuery --> QueryGraph
-    QueryGraph --> AIAgent
+    QueryGraph --> QueryClassifier
+    QueryClassifier -->|Safe and in scope| AIAgent
+    QueryClassifier -->|Unsafe, ambiguous, or out of scope| GuardrailResponse
     AIAgent --> QueryEmbedding
     Store --> VectorSearch
     Store --> BM25Search
@@ -42,6 +45,7 @@ flowchart LR
     RRF --> Rerank
     Rerank --> AIAgent
     AIAgent --> Answer
+    GuardrailResponse --> Answer
 ```
 
 Ingestion turns PDFs into structured, embedded chunks stored in ChromaDB. At query time, the agent retrieves and reranks relevant chunks before answering with page-level citations.
@@ -106,6 +110,7 @@ CHROMA_PERSIST_DIR=./knowledge_base
 RERANKER_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
 RERANKER_CACHE_DIR=./hf_models
 RERANKER_THRESHOLD=0.0
+CLASSIFIER_MODEL=gpt-5.4-nano
 LLM_MODEL=openai:gpt-4o-mini
 LLM_TEMPERATURE=0.0
 DENSE_TOP_K=25
@@ -148,6 +153,12 @@ curl.exe --no-buffer -X POST http://localhost:8000/query `
 ```
 
 The endpoint accepts a JSON object with one `query` field and returns the answer as `text/plain`. Invalid requests return a FastAPI validation error. Once streaming starts the HTTP status is already committed, so unexpected agent failures are logged and returned as sanitized error text.
+
+Before the QA agent runs, a separate tool-less classifier returns a structured
+`safety` and `scope` assessment. Only safe, in-scope requests reach the agent.
+Unsafe, ambiguous, and out-of-scope requests receive fixed application-owned
+responses through the same streaming endpoint. If classification fails, the graph
+fails closed and does not invoke the QA agent.
 
 ## Docker Usage
 

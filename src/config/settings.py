@@ -46,6 +46,11 @@ class RerankerConfig:
 
 
 @dataclass(frozen=True)
+class ClassifierConfig:
+    model: str = "gpt-5.4-nano"
+
+
+@dataclass(frozen=True)
 class AgentConfig:
     llm_model: str = "openai:gpt-4o-mini"
     temperature: float = 0.0
@@ -74,6 +79,7 @@ class Settings:
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     chroma: ChromaConfig = field(default_factory=ChromaConfig)
     reranker: RerankerConfig = field(default_factory=RerankerConfig)
+    classifier: ClassifierConfig = field(default_factory=ClassifierConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
     ingestion: IngestionConfig = field(default_factory=IngestionConfig)
 
@@ -96,6 +102,9 @@ def load_settings() -> Settings:
             ),
             cache_dir=os.environ.get("RERANKER_CACHE_DIR", "./hf_models"),
             score_threshold=float(os.environ.get("RERANKER_THRESHOLD", "0.0")),
+        ),
+        classifier=ClassifierConfig(
+            model=os.environ.get("CLASSIFIER_MODEL", "gpt-5.4-nano"),
         ),
         agent=AgentConfig(
             llm_model=os.environ.get("LLM_MODEL", "openai:gpt-4o-mini"),
