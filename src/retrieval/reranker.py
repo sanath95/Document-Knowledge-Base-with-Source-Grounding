@@ -74,7 +74,6 @@ class Reranker:
                 score=score,
             )
             for chunk, score in zip(chunks, scores)
-            if score > self._config.score_threshold
         ]
 
         reranked.sort(key=lambda c: c.score, reverse=True)

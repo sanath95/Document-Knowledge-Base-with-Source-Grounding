@@ -40,7 +40,6 @@ class RerankerConfig:
         "RERANKER_MODEL", "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
     )
     cache_dir: str = os.environ.get("RERANKER_CACHE_DIR", "./hf_models")
-    score_threshold: float = float(os.environ.get("RERANKER_THRESHOLD", "0.0"))
 
 
 @dataclass(frozen=True)
@@ -55,7 +54,7 @@ class ValidatorConfig:
 
 @dataclass(frozen=True)
 class AgentConfig:
-    llm_model: str = os.environ.get("LLM_MODEL", "openai:gpt-4o-mini")
+    llm_model: str = os.environ.get("LLM_MODEL", "openai:gpt-5.4")
     temperature: float = float(os.environ.get("LLM_TEMPERATURE", "0.0"))
     parallel_tool_calls: bool = True
     dense_top_k: int = int(os.environ.get("DENSE_TOP_K", "25"))
