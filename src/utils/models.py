@@ -9,6 +9,14 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypedDict
+
+
+class ConversationTurn(TypedDict):
+    """Compact, serialisable user/assistant exchange persisted by LangGraph."""
+
+    user: str
+    assistant: str
 
 
 # ── Ingestion models ──────────────────────────────────────────────────────────

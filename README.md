@@ -6,6 +6,7 @@ A document question-answering project for indexing local PDFs and answering ques
 
 - Header-aware semantic chunking.
 - Hybrid dense and sparse retrieval combined with Reciprocal Rank Fusion (RRF) and Cross-encoder reranking.
+- Persistent conversation memory with standalone follow-up resolution.
 - Safety classification of the query.
 - Retrieval-backed question answering with page-level citations.
 - Faithfulness and context-sufficiency evaluation.
@@ -29,10 +30,12 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    Query["POST /query"] --> Classify["Safety classifier"]
+    Query["POST /query"] --> Context["Resolve follow-up from conversation"]
+    Context -->|Failed| Rephrase["Request a standalone rephrasing"]
+    Context -->|Resolved query| Classify["Context-aware safety classifier"]
     Classify -->|Unsafe| Guardrail["Guardrail response"]
     Classify -->|Safe| Agent["Document QA agent"]
-    Agent --> |Evidence+Answer| Validate["Answer validator"]
+    Agent --> |Evidence + answer + resolved query| Validate["Answer validator"]
     Validate -->Result["Answer + validation results"]
     subgraph Agentic RAG
     Agent --> |tool| Retrieve["Dense + Sparse retrieval"]
@@ -49,7 +52,8 @@ The agent may make multiple focused retrieval calls before producing an answer.
 - Ingestion and serving are separate processes because indexing documents and answering questions have different lifecycles.
 - ChromaDB provides local persistent vector storage without requiring a separate database service.
 - Dense retrieval and BM25 provide complementary semantic and lexical candidates. RRF combines their ranks before a cross-encoder scores relevance to the search query.
-- The safety classifier, QA agent, and answer validator have separate responsibilities and model settings.
+- Follow-ups are rewritten once into a standalone query so safety classification, retrieval, answering, and validation share the same interpretation.
+- The contextualizer, safety classifier, QA agent, and answer validator have separate responsibilities and model settings.
 
 ## Project Structure
 
@@ -112,6 +116,7 @@ The configurable defaults are:
 | `RERANKER_CACHE_DIR` | `./hf_models` | Serving |
 | `RERANKER_THRESHOLD` | `0.0` | Serving |
 | `CLASSIFIER_MODEL` | `gpt-5.4-nano` | Serving |
+| `CONTEXTUALIZER_MODEL` | `gpt-5.4-nano` | Serving |
 | `VALIDATOR_MODEL` | `gpt-5.4-nano` | Serving |
 | `LLM_MODEL` | `openai:gpt-4o-mini` | Serving |
 | `LLM_TEMPERATURE` | `0.0` | Serving |
@@ -120,6 +125,9 @@ The configurable defaults are:
 | `FUSION_TOP_K` | `25` | Serving |
 | `FINAL_TOP_K` | `10` | Serving |
 | `RRF_K` | `60` | Serving |
+| `CONVERSATION_CHECKPOINT_PATH` | `./conversation_checkpoints.sqlite3` | Serving |
+| `HISTORY_MAX_TURNS` | `10` | Serving |
+| `LANGGRAPH_STRICT_MSGPACK` | `true` | Serving |
 | `HOST` | `0.0.0.0` | `src/serve.py` process |
 | `PORT` | `8000` | `src/serve.py` process |
 
@@ -141,7 +149,7 @@ The Langfuse SDK also supports `LANGFUSE_TRACING_ENABLED=false` to disable expor
 
 ## Observability
 
-When Langfuse credentials are configured, each `/query` request creates a `kb.query` observation containing the safety classification, the Pydantic-AI QA agent's model and tool spans, retrieval summaries, answer validation, and the final workflow outcome. Successfully completed validation adds boolean `faithfulness` and `context_sufficiency` trace scores. The response includes `X-Langfuse-Trace-Id` when a trace ID is available.
+When Langfuse credentials are configured, each `/query` request creates a `kb.query` observation containing conversational query contextualization, safety classification, the Pydantic-AI QA agent's model and tool spans, retrieval summaries, answer validation, and the final workflow outcome. Successfully completed validation adds boolean `faithfulness` and `context_sufficiency` trace scores. The response includes `X-Langfuse-Trace-Id` when a trace ID is available.
 
 The ingestion command creates a `kb.ingestion` observation with document, chunk, and failed-file counts. Embedding observations record batch sizes, dimensions, and token usage, but not embedding vectors. Retrieval observations record selected chunk IDs, source pages, and reranker scores rather than copying the selected chunk text into the manual retrieval observation.
 
@@ -176,20 +184,23 @@ Send a query:
 ```powershell
 curl.exe -X POST http://localhost:8000/query `
   -H "Content-Type: application/json" `
-  -d '{"query":"What are the main findings?"}'
+  -d '{"conversation_id":"14f29586-8309-4e0e-87e3-b53877c935fa","query":"What are the main findings?"}'
 ```
 
 ## API
 
 ### `POST /query`
 
-The endpoint accepts JSON with one `query` string. Leading and trailing whitespace is removed; the resulting query must contain between 1 and 10,000 characters.
+The endpoint accepts a UUID `conversation_id` and one `query` string. Leading and trailing whitespace is removed; the resulting query must contain between 1 and 10,000 characters. Generate a new conversation ID for the first turn and reuse it for every follow-up in that conversation.
 
 ```json
 {
+  "conversation_id": "14f29586-8309-4e0e-87e3-b53877c935fa",
   "query": "What are the main findings?"
 }
 ```
+
+LangGraph checkpoints the conversation state in SQLite. On follow-up turns, a tool-less contextualizer uses recent exchanges to produce one standalone query. Safety classification, retrieval, answer generation, and validation all use that same resolved meaning; only the user's original wording and the final answer are appended to conversation history. Retrieved chunks and tool results remain outside the model-visible history.
 
 Responses produced by the query workflow are `text/plain`. For a completed QA path, the body contains the generated answer followed by a `Validation` block:
 
@@ -208,12 +219,13 @@ HTTP 200 means the application completed one of its defined workflow paths; it d
 | --- | --- | --- |
 | Safe query, answer and validation completed | `200` | Answer plus boolean validation results and reasons for failed checks |
 | Unsafe query | `200` | Fixed guardrail message; the QA agent is not called |
+| Conversational follow-up cannot be resolved | `200` | Fixed rephrasing request; the classifier and QA agent are not called |
 | Safety classifier fails or returns no usable assessment | `200` | Fixed classification-failure message; the QA agent is not called |
 | Answer validator fails or returns no usable assessment | `200` | Generated answer with both validation fields marked `unavailable` |
 | Request body fails FastAPI/Pydantic validation | `422` | FastAPI JSON validation error |
 | An unhandled query-processing error reaches the API boundary | `503` | Sanitized plain-text service-unavailable message |
 
-The validator receives the query, completed answer, and deduplicated evidence text and source metadata. Retrieval and reranker scores are excluded. It checks:
+The validator receives the resolved standalone query, completed answer, and deduplicated evidence text and source metadata. Retrieval and reranker scores are excluded. Conversation history helps resolve the query but is not supplied as evidence. The validator checks:
 
 - `faithfulness`: whether each material answer claim is supported by the retrieved chunks or a direct inference from them.
 - `context_sufficiency`: whether the retrieved chunks contain enough information to answer every material part of the query.
@@ -242,6 +254,7 @@ Docker Compose uses these mounts:
 - `./data:/data:ro` exposes the host PDFs read-only to the ingestion container.
 - `knowledge_base` persists the ChromaDB collection between ingestion and serving containers.
 - `hf_models` caches the Hugging Face reranker and tokenizer files.
+- `conversations` persists LangGraph conversation checkpoints across serving-container restarts.
 
 The `serve` service does not depend on or automatically run `ingest`; it expects the shared `knowledge_base` volume to be populated. When PDFs change, rerun ingestion and restart the serving process so its in-memory BM25 index is rebuilt:
 

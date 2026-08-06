@@ -7,9 +7,17 @@ All external dependencies are injected via AgentDeps — no module-level singlet
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 
 from pydantic_ai import Agent, RunContext
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    UserPromptPart,
+)
 from pydantic_ai.models.openai import OpenAIModelSettings
 
 from config.settings import AgentConfig, Settings
@@ -18,7 +26,13 @@ from retrieval.bm25_retriever import BM25Retriever
 from retrieval.fusion import reciprocal_rank_fusion
 from retrieval.reranker import Reranker
 from retrieval.vector_store import VectorStore
-from utils.models import EvidenceChunk, QAResult, RetrievedChunk, deduplicate_chunks
+from utils.models import (
+    ConversationTurn,
+    EvidenceChunk,
+    QAResult,
+    RetrievedChunk,
+    deduplicate_chunks,
+)
 from utils.observability import observation, tracing_enabled
 
 _AGENT_INSTRUCTIONS = """
@@ -29,6 +43,11 @@ Your job:
 2. Formulate effective semantic search queries.
 3. Use retrieve_and_rerank to gather evidence.
 4. Answer ONLY from retrieved evidence.
+
+Conversation handling:
+- Use prior turns to resolve references and understand follow-up questions.
+- Treat prior answers as conversational context, not as document evidence.
+- Retrieve fresh supporting evidence for every factual answer.
 
 Retrieval strategy:
 - Rewrite vague questions into precise retrieval queries while preserving exact
@@ -51,6 +70,21 @@ Answer style:
 - Prefer bullet points for multi-part answers.
 - Summarise repeated evidence instead of quoting excessively.
 """
+
+
+def _to_model_message_history(
+    history: Sequence[ConversationTurn],
+) -> list[ModelMessage]:
+    """Convert persisted compact turns into Pydantic-AI model messages."""
+    messages: list[ModelMessage] = []
+    for turn in history:
+        messages.extend(
+            (
+                ModelRequest(parts=[UserPromptPart(content=turn["user"])]),
+                ModelResponse(parts=[TextPart(content=turn["assistant"])]),
+            )
+        )
+    return messages
 
 
 @dataclass
@@ -210,14 +244,24 @@ class QAAgent:
                 final_top_k=settings.agent.final_top_k,
                 rrf_k=settings.agent.rrf_k,
             )
+            self._history_max_turns = settings.conversation.history_max_turns
         except Exception:
             self._reranker.close()
             raise
 
-    async def generate_answer(self, query: str) -> QAResult:
+    async def generate_answer(
+        self,
+        query: str,
+        history: Sequence[ConversationTurn] = (),
+    ) -> QAResult:
         """Generate a complete answer and capture request-local retrieval evidence."""
         run_deps = replace(self._deps, retrieved_chunks=[])
-        result = await self._agent.run(query, deps=run_deps)
+        recent_history = history[-self._history_max_turns :]
+        result = await self._agent.run(
+            query,
+            deps=run_deps,
+            message_history=_to_model_message_history(recent_history),
+        )
 
         return QAResult(
             answer=result.output,

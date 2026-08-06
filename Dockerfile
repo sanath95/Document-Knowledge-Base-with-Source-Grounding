@@ -31,8 +31,8 @@ COPY src/orchestration/ ./src/orchestration/
 COPY src/utils/       ./src/utils/
 COPY src/serve.py     ./src/serve.py
 
-RUN mkdir -p /data /knowledge_base /app/hf_models \
-    && chown -R appuser:appuser /data /knowledge_base /app/hf_models
+RUN mkdir -p /data /knowledge_base /app/hf_models /conversations \
+    && chown -R appuser:appuser /data /knowledge_base /app/hf_models /conversations
 
 USER appuser
 

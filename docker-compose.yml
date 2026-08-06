@@ -35,9 +35,12 @@ services:
     volumes:
       - knowledge_base:/knowledge_base   # read-only — serve never writes
       - hf_models:/app/hf_models
+      - conversations:/conversations
     environment:
       CHROMA_PERSIST_DIR: /knowledge_base
       RERANKER_CACHE_DIR: /app/hf_models
+      CONVERSATION_CHECKPOINT_PATH: /conversations/checkpoints.sqlite3
+      LANGGRAPH_STRICT_MSGPACK: "true"
       HOST: 0.0.0.0
       PORT: 8000
     ports:
@@ -47,5 +50,6 @@ services:
 
 # ── Named volumes ─────────────────────────────────────────────────────────────
 volumes:
+  conversations:    # LangGraph checkpoints for multi-turn conversations
   knowledge_base:   # ChromaDB — persists between container restarts
   hf_models:        # HuggingFace model weights — avoid re-downloading

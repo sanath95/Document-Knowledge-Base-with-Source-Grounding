@@ -9,6 +9,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
+os.environ.setdefault("LANGGRAPH_STRICT_MSGPACK", "true")
 
 
 def _require_env(key: str) -> str:
@@ -48,6 +49,11 @@ class ClassifierConfig:
 
 
 @dataclass(frozen=True)
+class ContextualizerConfig:
+    model: str = os.environ.get("CONTEXTUALIZER_MODEL", "gpt-5.4-nano")
+
+
+@dataclass(frozen=True)
 class ValidatorConfig:
     model: str = os.environ.get("VALIDATOR_MODEL", "gpt-5.4-nano")
 
@@ -62,6 +68,19 @@ class AgentConfig:
     fusion_top_k: int = int(os.environ.get("FUSION_TOP_K", "25"))
     final_top_k: int = int(os.environ.get("FINAL_TOP_K", "10"))
     rrf_k: int = int(os.environ.get("RRF_K", "60"))
+
+
+@dataclass(frozen=True)
+class ConversationConfig:
+    checkpoint_path: str = os.environ.get(
+        "CONVERSATION_CHECKPOINT_PATH",
+        "./conversation_checkpoints.sqlite3",
+    )
+    history_max_turns: int = int(os.environ.get("HISTORY_MAX_TURNS", "10"))
+
+    def __post_init__(self) -> None:
+        if self.history_max_turns < 1:
+            raise ValueError("HISTORY_MAX_TURNS must be at least 1")
 
 
 @dataclass(frozen=True)
@@ -82,8 +101,10 @@ class Settings:
     chroma: ChromaConfig = field(default_factory=ChromaConfig)
     reranker: RerankerConfig = field(default_factory=RerankerConfig)
     classifier: ClassifierConfig = field(default_factory=ClassifierConfig)
+    contextualizer: ContextualizerConfig = field(default_factory=ContextualizerConfig)
     validator: ValidatorConfig = field(default_factory=ValidatorConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
+    conversation: ConversationConfig = field(default_factory=ConversationConfig)
     ingestion: IngestionConfig = field(default_factory=IngestionConfig)
 
 
