@@ -2,58 +2,129 @@
 
 A document question-answering project for indexing local PDFs and answering questions from their contents with page-level source references.
 
-## Features
-
-- Header-aware semantic chunking.
-- Hybrid dense and sparse retrieval combined with Reciprocal Rank Fusion (RRF) and Cross-encoder reranking.
-- Persistent conversation memory with standalone follow-up resolution.
-- Safety classification of the query.
-- Retrieval-backed question answering with page-level citations.
-- Faithfulness and context-sufficiency evaluation.
-- Langfuse observations.
-- Served on FastAPI.
-- Containerized with Docker.
-
 ## How It Works
 
-### Ingestion
-
+### Ingestion lifecycle
 ```mermaid
 flowchart LR
-    PDFs["PDF files"] --> Extract["Markdown extraction"]
-    Extract --> Chunk["Semantic chunking"]
-    Chunk --> Embed["OpenAI embeddings"]
-    Embed --> Chroma["ChromaDB upsert"]
+    Start@{ shape: sm-circ, label: "Start" }
+    PDFs@{ shape: docs, label: "PDF files" }
+    Parser["Parse PDF"]
+    Chunk["Semantic chunking"]
+    Embed@{ shape: subproc, label: "Generate embeddings" }
+    Chroma@{ shape: cyl, label: "Vector database" }
+    Stop@{ shape: framed-circle, label: "Done" }
+
+    Start --> PDFs
+    PDFs --> Parser
+    Parser --> Chunk
+    Chunk --> Embed
+    Embed -->|store vectors + metadata| Chroma
+    Chroma --> Stop
+
+    classDef model fill:#ede9fe,stroke:#7c3aed,stroke-width:2px,color:#2e1065
+    classDef data fill:#ecfdf5,stroke:#059669,stroke-width:2px,color:#064e3b
+    classDef terminal fill:#fee2e2,stroke:#dc2626,stroke-width:3px,color:#7f1d1d
+
+    class Embed model
+    class PDFs,Chroma data
+    class Start,Stop terminal
 ```
 
-### Query serving
+1. **Extract:** ``PyMuPDF4LLM`` converts each PDF into Markdown while preserving page boundaries. Its automatic OCR support is available when needed.
+2. **Semantic Chunking:** Each page is split at Markdown headings. Chunks retain the source filename, page number, and header metadata for retrieval and citations.
+3. **Embed:** The embedding model is configurable and defaults to `text-embedding-3-small`.
+4. **Store:** Chunks, metadata, and vectors are upserted into a local persistent ``ChromaDB`` collection.
+
+### Query lifecycle
 
 ```mermaid
 flowchart TD
-    Query["POST /query"] --> Context["Resolve follow-up from conversation"]
-    Context -->|Failed| Rephrase["Request a standalone rephrasing"]
-    Context -->|Resolved query| Classify["Context-aware safety classifier"]
-    Classify -->|Unsafe| Guardrail["Guardrail response"]
-    Classify -->|Safe| Agent["Document QA agent"]
-    Agent --> |Evidence + answer + resolved query| Validate["Answer validator"]
-    Validate -->Result["Answer + validation results"]
-    subgraph Agentic RAG
-    Agent --> |tool| Retrieve["Dense + Sparse retrieval"]
-    Retrieve --> Fuse["RRF fusion"]
-    Fuse --> Rerank["Reranking"]
-    Rerank --> Agent
+    Start@{ shape: sm-circ, label: "Start" }
+    Query@{ shape: lean-r, label: "POST /query" }
+
+    Start --> Query
+    subgraph FastAPI
+        Query --> Context
+        subgraph LangGraph
+            Context@{ shape: subproc, label: "Contextualize query<br/>(LLM)" }
+            Rephrase@{ shape: lean-r, label: "Request query rephrasing" }
+            Classify@{ shape: subproc, label: "Safety classifier<br/>(LLM)" }
+            Guardrail@{ shape: lean-r, label: "Guardrail response" }
+            Agent@{ shape: tag-rect, label: "Document QA agent<br/>(LLM agent)" }
+            Validate@{ shape: subproc, label: "Answer validator<br/>(LLM)" }
+            Result@{ shape: lean-r, label: "Answer + validation results" }
+
+            
+            Context -->|failed| Rephrase
+            Context -->|resolved query| Classify
+            Classify -->|unsafe| Guardrail
+            Classify -->|safe| Agent
+            Agent -->|query + evidence + answer| Validate
+            Validate --> Result
+
+            subgraph Agentic_RAG["Agentic RAG"]
+                Retrieve["Hybrid retrieval"]
+                Fuse["Fuse results"]
+                Rerank["Rerank documents"]
+
+                Agent -->|tool call| Retrieve
+                Retrieve --> Fuse
+                Retrieve <--> |dense retrieval| VectorDatabase@{ shape: cyl, label: "Vector database" }
+                Retrieve <--> |sparse retrieval| Index@{ shape: cyl, label: "Search index" }
+                Fuse --> Rerank
+                Rerank -->|retrieved documents| Agent
+            end
+        end
     end
+
+    Rephrase --> StopRephrase@{ shape: framed-circle, label: "Stop" }
+    Guardrail --> StopGuardrail@{ shape: framed-circle, label: "Stop" }
+    Result --> StopResult@{ shape: framed-circle, label: "Stop" }
+
+    classDef llm fill:#ede9fe,stroke:#7c3aed,stroke-width:2px,color:#2e1065
+    classDef agent fill:#dbeafe,stroke:#2563eb,stroke-width:3px,color:#172554
+    classDef io fill:#ecfdf5,stroke:#059669,stroke-width:2px,color:#064e3b
+    classDef terminal fill:#fee2e2,stroke:#dc2626,stroke-width:3px,color:#7f1d1d
+
+    class Context,Classify,Validate llm
+    class Agent agent
+    class Query,Rephrase,Guardrail,Result io
+    class Start,StopRephrase,StopGuardrail,StopResult terminal
 ```
 
-The agent may make multiple focused retrieval calls before producing an answer.
+- ``FastAPI`` validates requests and exposes the `POST /query` endpoint.
+- ``LangGraph`` provides stateful orchestration and coordinates the workflow. Conversation state is checkpointed in `SQLite`.
+- **Query contextualization** uses recent conversation history to rewrite each request as a standalone document query, resolving references, omitted subjects, comparisons, and constraints.
+- **Safety classification** evaluates the resolved query in its conversational context and routes unsafe requests to a guardrail response before retrieval or answer generation.
+- **Agentic RAG** is implemented with a ``Pydantic AI`` tool-calling agent. It plans focused searches, rewrites retrieval queries, evaluates the returned evidence, and can search again before producing an answer grounded only in the documents.
+- **Multilingual hybrid retrieval** builds a stronger evidence set through four stages:
 
-## Design
+    1. Dense search in ChromaDB finds semantically related passages even when the wording differs.
+    2. ``BM25`` sparse search finds exact terms, names, and identifiers.
+    3. ``Reciprocal Rank Fusion`` combines both ranked lists without normalizing their scores.
+    4. The multilingual `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` model jointly scores each query-document pair and reranks the candidates.
 
-- Ingestion and serving are separate processes because indexing documents and answering questions have different lifecycles.
-- ChromaDB provides local persistent vector storage without requiring a separate database service.
-- Dense retrieval and BM25 provide complementary semantic and lexical candidates. RRF combines their ranks before a cross-encoder scores relevance to the search query.
-- Follow-ups are rewritten once into a standalone query so safety classification, retrieval, answering, and validation share the same interpretation.
-- The contextualizer, safety classifier, QA agent, and answer validator have separate responsibilities and model settings.
+- **Answer validation** checks two independent boolean outcomes: whether the answer is faithful to the evidence and whether the retrieved context is sufficient to answer the query. It also provides reasoning when the evaluation is false.
+- **Langfuse** provides optional end-to-end tracing of workflow decisions, model and tool calls, retrieval activity, validation results, latency, and cost.
+
+> Confidence scores can suffer from variance and drift, whereas boolean evaluations provide clearer and more repeatable decisions. That is the reason for having a boolean validation.
+
+The resolved standalone query is shared by safety classification, retrieval, answer generation, and validation so every stage works from the same interpretation. Answers cite evidence using the source PDF and page number.
+
+## Features
+
+| Area | Decision | Key point |
+| --- | --- | --- |
+| Runtime | Separate data ingestion and QA serving lifecycles | Indexing is independent of API startup and availability. |
+| Chunking | Preserve page boundaries and split by headings | Chunks retain semantic structure and page-level citation metadata. |
+| Retrieval | Combine dense search and BM25 using RRF and reranking | Semantic and exact-term matches contribute to one ranked result set. |
+| Answering | Use a tool-calling agent grounded in retrieved evidence | The agent can run multiple searches and must cite source pages. |
+| Orchestration | Use LangGraph for context, safety, QA, and validation | Every stage uses the same resolved standalone query. |
+| Persistence | Store vectors in ChromaDB and conversations in SQLite | Document knowledge and conversation state remain separate. |
+| Quality | Validate faithfulness and context sufficiency independently | Answer fluency alone is not treated as evidence of correctness. |
+| Containerization | Use separate Docker images managed with Docker Compose | Ingestion and serving remain isolated while sharing persistent data volumes. |
+| Observability | Enable Langfuse when tracing is needed | Model calls, retrieval, validation, latency, and cost become inspectable. |
 
 ## Project Structure
 
