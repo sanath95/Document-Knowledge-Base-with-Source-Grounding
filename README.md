@@ -124,32 +124,6 @@ flowchart TD
 | Containerization | Use separate Docker images managed with Docker Compose | Ingestion and serving remain isolated while sharing persistent data volumes. |
 | Observability | Enable Langfuse when tracing is needed | Model calls, retrieval, validation, latency, and cost become inspectable. |
 
-## Query Graph
-
-```mermaid
-graph TD
-    __start__([__start__])
-    contextualize_query(contextualize_query)
-    classify_query(classify_query)
-    run_qa_agent(run_qa_agent)
-    validate_answer(validate_answer)
-    write_validated_response(write_validated_response)
-    write_guardrail_response(write_guardrail_response)
-    write_contextualization_failure(write_contextualization_failure)
-    __end__([__end__])
-
-    __start__ --> contextualize_query
-    contextualize_query -.-> classify_query
-    contextualize_query -.-> write_contextualization_failure
-    classify_query -.-> run_qa_agent
-    classify_query -.-> write_guardrail_response
-    run_qa_agent --> validate_answer
-    validate_answer --> write_validated_response
-    write_contextualization_failure --> __end__
-    write_guardrail_response --> __end__
-    write_validated_response --> __end__
-```
-
 ## Project Structure
 
 ```text
