@@ -7,13 +7,14 @@ using LangChain's MarkdownHeaderTextSplitter.
 
 from __future__ import annotations
 
+import logging
+
 from langchain_text_splitters import MarkdownHeaderTextSplitter
 
 from config.settings import IngestionConfig
-from utils.logging import get_logger
 from utils.models import DocumentChunk, PageContent
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class MarkdownChunker:

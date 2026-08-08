@@ -9,15 +9,15 @@ the async event loop.
 from __future__ import annotations
 
 import asyncio
+import logging
 from concurrent.futures import ThreadPoolExecutor
 
 from sentence_transformers import CrossEncoder
 
 from config.settings import RerankerConfig
-from utils.logging import get_logger
 from utils.models import RetrievedChunk
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class Reranker:
@@ -68,13 +68,17 @@ class Reranker:
 
         reranked = [
             RetrievedChunk(
+                chunk_id=chunk.chunk_id,
                 document=chunk.document,
                 metadata=chunk.metadata,
                 score=score,
             )
             for chunk, score in zip(chunks, scores)
-            if score > self._config.score_threshold
         ]
 
         reranked.sort(key=lambda c: c.score, reverse=True)
         return reranked
+
+    def close(self) -> None:
+        """Wait for pending inference and close the worker thread."""
+        self._executor.shutdown(wait=True)

@@ -6,30 +6,41 @@ external serialisation is needed).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import TypedDict
+
+
+class ConversationTurn(TypedDict):
+    """Compact, serialisable user/assistant exchange persisted by LangGraph."""
+
+    user: str
+    assistant: str
 
 
 # ── Ingestion models ──────────────────────────────────────────────────────────
 
+
 @dataclass(frozen=True)
 class PageContent:
     """Raw Markdown extracted from a single PDF page."""
-    page_number: int          # 1-based
+
+    page_number: int  # 1-based
     markdown: str
-    source_pdf: str           # normalised filename, e.g. "report_2024.pdf"
+    source_pdf: str  # normalised filename, e.g. "report_2024.pdf"
 
 
 @dataclass(frozen=True)
 class DocumentChunk:
     """A semantically bounded section of a PDF page, ready for embedding."""
+
     content: str
-    source_pdf: str           # normalised filename
-    page_number: int          # 1-based
-    h1: Optional[str] = None
-    h2: Optional[str] = None
-    h3: Optional[str] = None
+    source_pdf: str  # normalised filename
+    page_number: int  # 1-based
+    h1: str | None = None
+    h2: str | None = None
+    h3: str | None = None
 
     # ── Derived helpers ───────────────────────────────────────────────────────
 
@@ -61,9 +72,12 @@ class DocumentChunk:
 
 # ── Retrieval models ──────────────────────────────────────────────────────────
 
+
 @dataclass(frozen=True)
 class RetrievedChunk:
     """A chunk returned by the vector store, optionally reranked."""
+
+    chunk_id: str
     document: str
     metadata: dict[str, str | int]
     score: float
@@ -76,12 +90,45 @@ class RetrievedChunk:
     def page_number(self) -> int:
         return int(self.metadata.get("page_number", 0))
 
-    def citation(self) -> str:
-        return f"[{self.source_pdf}, page {self.page_number}]"
+
+@dataclass(frozen=True)
+class EvidenceChunk:
+    """Score-free retrieval evidence safe to expose to the validator."""
+
+    chunk_id: str
+    document: str
+    metadata: dict[str, str | int]
+
+    @classmethod
+    def from_retrieved(cls, chunk: RetrievedChunk) -> "EvidenceChunk":
+        return cls(
+            chunk_id=chunk.chunk_id,
+            document=chunk.document,
+            metadata=dict(chunk.metadata),
+        )
+
+    @property
+    def source_pdf(self) -> str:
+        return str(self.metadata.get("pdf_name", "<unknown>"))
+
+    @property
+    def page_number(self) -> int:
+        return int(self.metadata.get("page_number", 0))
 
 
-@dataclass
-class DocumentIndex:
-    """Summary of all chunks belonging to a single PDF in the store."""
-    pdf_name: str
-    chunk_count: int
+@dataclass(frozen=True)
+class QAResult:
+    """A complete generated answer and the unique chunks exposed to the agent."""
+
+    answer: str
+    retrieved_chunks: tuple[EvidenceChunk, ...]
+
+
+def deduplicate_chunks(
+    chunks: Iterable[EvidenceChunk],
+) -> tuple[EvidenceChunk, ...]:
+    """Keep the first occurrence of each stable retrieval chunk ID."""
+    unique: dict[str, EvidenceChunk] = {}
+    for chunk in chunks:
+        unique.setdefault(chunk.chunk_id, chunk)
+    return tuple(unique.values())

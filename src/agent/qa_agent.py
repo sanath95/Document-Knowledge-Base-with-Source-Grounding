@@ -1,26 +1,39 @@
 """
 QAAgent
 ───────
-Pydantic-AI agent wired with retrieve_and_rerank and list_documents tools.
+Pydantic-AI agent wired with the retrieve_and_rerank tool.
 All external dependencies are injected via AgentDeps — no module-level singletons.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Optional
+from collections.abc import Sequence
+from dataclasses import dataclass, field, replace
 
 from pydantic_ai import Agent, RunContext
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    UserPromptPart,
+)
 from pydantic_ai.models.openai import OpenAIModelSettings
 
 from config.settings import AgentConfig, Settings
 from ingestion.embedder import Embedder
+from retrieval.bm25_retriever import BM25Retriever
+from retrieval.fusion import reciprocal_rank_fusion
 from retrieval.reranker import Reranker
 from retrieval.vector_store import VectorStore
-from utils.logging import get_logger
-from utils.models import DocumentIndex, RetrievedChunk
-
-logger = get_logger(__name__)
+from utils.models import (
+    ConversationTurn,
+    EvidenceChunk,
+    QAResult,
+    RetrievedChunk,
+    deduplicate_chunks,
+)
+from utils.observability import observation, tracing_enabled
 
 _AGENT_INSTRUCTIONS = """
 You are a retrieval-augmented document QA agent.
@@ -31,20 +44,19 @@ Your job:
 3. Use retrieve_and_rerank to gather evidence.
 4. Answer ONLY from retrieved evidence.
 
+Conversation handling:
+- Use prior turns to resolve references and understand follow-up questions.
+- Treat prior answers as conversational context, not as document evidence.
+- Retrieve fresh supporting evidence for every factual answer.
+
 Retrieval strategy:
-- Rewrite vague questions into precise retrieval queries.
+- Rewrite vague questions into precise retrieval queries while preserving exact
+  identifiers, names, and domain terms that are useful for keyword search.
 - Break multi-part questions into separate focused searches.
 - For comparisons retrieve evidence for each item independently.
 - Prefer multiple targeted searches over one broad search.
 - Retry retrieval with reformulated queries only if evidence is weak or irrelevant.
 - Stop retrieving once sufficient evidence is collected.
-
-Document selection:
-- Use list_documents when:
-  - the user asks what documents are available,
-  - the document reference is ambiguous,
-  - the user asks about a specific document that may not exist,
-  - or the user asks for comparisons between documents.
 
 Grounding rules:
 - Never use outside knowledge.
@@ -60,13 +72,35 @@ Answer style:
 """
 
 
+def _to_model_message_history(
+    history: Sequence[ConversationTurn],
+) -> list[ModelMessage]:
+    """Convert persisted compact turns into Pydantic-AI model messages."""
+    messages: list[ModelMessage] = []
+    for turn in history:
+        messages.extend(
+            (
+                ModelRequest(parts=[UserPromptPart(content=turn["user"])]),
+                ModelResponse(parts=[TextPart(content=turn["assistant"])]),
+            )
+        )
+    return messages
+
+
 @dataclass
 class AgentDeps:
     """All runtime dependencies required by the agent's tools."""
+
     vector_store: VectorStore
     embedder: Embedder
     reranker: Reranker
-    retrieval_top_k: int = 10
+    bm25_retriever: BM25Retriever
+    dense_top_k: int = 25
+    bm25_top_k: int = 25
+    fusion_top_k: int = 25
+    final_top_k: int = 10
+    rrf_k: int = 60
+    retrieved_chunks: list[EvidenceChunk] = field(default_factory=list)
 
 
 def build_agent(config: AgentConfig) -> Agent[AgentDeps]:
@@ -89,69 +123,92 @@ def build_agent(config: AgentConfig) -> Agent[AgentDeps]:
             temperature=config.temperature,
             parallel_tool_calls=config.parallel_tool_calls,
         ),
+        instrument=tracing_enabled(),
     )
-
-    @agent.tool
-    def list_documents(ctx: RunContext[AgentDeps]) -> list[dict]:
-        """
-        List all indexed PDF documents in the knowledge base.
-
-        Use this tool when:
-        - the user asks what documents are available,
-        - a document name is ambiguous,
-        - retrieval should be scoped to a specific document,
-        - or the user asks for comparisons between documents.
-
-        Returns a list of dicts with 'pdf_name' and 'chunks'.
-        """
-        documents: list[DocumentIndex] = ctx.deps.vector_store.list_documents()
-        return [
-            {"pdf_name": doc.pdf_name, "chunks": doc.chunk_count}
-            for doc in documents
-        ]
 
     @agent.tool
     async def retrieve_and_rerank(
         ctx: RunContext[AgentDeps],
         search_query: str,
-        filters: Optional[dict] = None,
     ) -> list[dict]:
         """
-        Retrieve and rerank document chunks relevant to *search_query*.
+        Retrieve, fuse, and rerank document chunks relevant to *search_query*.
 
         Args:
             search_query:
                 Optimised semantic retrieval query.
-            filters:
-                Optional ChromaDB metadata filter.
-                Examples:
-                  {"pdf_name": "report.pdf"}
-                  {"pdf_name": {"$in": ["a.pdf", "b.pdf"]}}
-                  {"page_number": {"$gte": 10}}
 
-        Returns a reranked list of chunks with 'document', 'metadata', 'score'.
+        Returns a hybrid-reranked list of chunks with 'document', 'metadata',
+        and cross-encoder 'score'.
         """
-        query_embedding = await ctx.deps.embedder.embed_one(search_query)
+        with observation(
+            name="retrieve_and_rerank",
+            as_type="retriever",
+            input={"search_query": search_query},
+            metadata={
+                "dense_top_k": ctx.deps.dense_top_k,
+                "bm25_top_k": ctx.deps.bm25_top_k,
+                "fusion_top_k": ctx.deps.fusion_top_k,
+                "final_top_k": ctx.deps.final_top_k,
+            },
+        ) as retrieval_observation:
+            query_embedding = await ctx.deps.embedder.embed_one(search_query)
 
-        candidates: list[RetrievedChunk] = ctx.deps.vector_store.query(
-            query_embedding=query_embedding,
-            top_k=ctx.deps.retrieval_top_k,
-            filters=filters,
-        )
+            dense_candidates: list[RetrievedChunk] = ctx.deps.vector_store.query(
+                query_embedding=query_embedding,
+                top_k=ctx.deps.dense_top_k,
+            )
 
-        reranked: list[RetrievedChunk] = await ctx.deps.reranker.rerank(
-            query=search_query,
-            chunks=candidates,
-        )
+            sparse_candidates: list[RetrievedChunk] = ctx.deps.bm25_retriever.query(
+                query=search_query,
+                top_k=ctx.deps.bm25_top_k,
+            )
 
-        return [
-            {
-                "document": chunk.document,
-                "metadata": chunk.metadata,
-                "score": chunk.score,
-            }
-            for chunk in reranked
-        ]
+            fused_candidates: list[RetrievedChunk] = reciprocal_rank_fusion(
+                [dense_candidates, sparse_candidates],
+                rrf_k=ctx.deps.rrf_k,
+            )[: ctx.deps.fusion_top_k]
+
+            reranked: list[RetrievedChunk] = await ctx.deps.reranker.rerank(
+                query=search_query,
+                chunks=fused_candidates,
+            )
+
+            selected_chunks = reranked[: ctx.deps.final_top_k]
+            ctx.deps.retrieved_chunks.extend(
+                EvidenceChunk.from_retrieved(chunk) for chunk in selected_chunks
+            )
+
+            if retrieval_observation is not None:
+                retrieval_observation.update(
+                    output={
+                        "candidate_counts": {
+                            "dense": len(dense_candidates),
+                            "bm25": len(sparse_candidates),
+                            "fused": len(fused_candidates),
+                            "reranked": len(reranked),
+                            "selected": len(selected_chunks),
+                        },
+                        "selected_chunks": [
+                            {
+                                "chunk_id": chunk.chunk_id,
+                                "source_pdf": chunk.source_pdf,
+                                "page_number": chunk.page_number,
+                                "reranker_score": chunk.score,
+                            }
+                            for chunk in selected_chunks
+                        ],
+                    }
+                )
+
+            return [
+                {
+                    "document": chunk.document,
+                    "metadata": chunk.metadata,
+                    "score": chunk.score,
+                }
+                for chunk in selected_chunks
+            ]
 
     return agent
 
@@ -169,19 +226,48 @@ class QAAgent:
         self._vector_store = VectorStore(settings.chroma)
         self._embedder = Embedder(settings.openai_api_key, settings.embedding)
         self._reranker = Reranker(settings.reranker)
-        self._agent = build_agent(settings.agent)
-        self._deps = AgentDeps(
-            vector_store=self._vector_store,
-            embedder=self._embedder,
-            reranker=self._reranker,
-            retrieval_top_k=settings.agent.retrieval_top_k,
+        try:
+            self._bm25_retriever = BM25Retriever(
+                collection=self._vector_store.collection,
+                tokenizer_model_name=settings.reranker.model_name,
+                tokenizer_cache_dir=settings.reranker.cache_dir,
+            )
+            self._agent = build_agent(settings.agent)
+            self._deps = AgentDeps(
+                vector_store=self._vector_store,
+                embedder=self._embedder,
+                reranker=self._reranker,
+                bm25_retriever=self._bm25_retriever,
+                dense_top_k=settings.agent.dense_top_k,
+                bm25_top_k=settings.agent.bm25_top_k,
+                fusion_top_k=settings.agent.fusion_top_k,
+                final_top_k=settings.agent.final_top_k,
+                rrf_k=settings.agent.rrf_k,
+            )
+            self._history_max_turns = settings.conversation.history_max_turns
+        except Exception:
+            self._reranker.close()
+            raise
+
+    async def generate_answer(
+        self,
+        query: str,
+        history: Sequence[ConversationTurn] = (),
+    ) -> QAResult:
+        """Generate a complete answer and capture request-local retrieval evidence."""
+        run_deps = replace(self._deps, retrieved_chunks=[])
+        recent_history = history[-self._history_max_turns :]
+        result = await self._agent.run(
+            query,
+            deps=run_deps,
+            message_history=_to_model_message_history(recent_history),
         )
 
-    def to_web(self) -> object:
-        """Expose the agent as a web app via pydantic-ai's built-in server."""
-        return self._agent.to_web(deps=self._deps)
+        return QAResult(
+            answer=result.output,
+            retrieved_chunks=deduplicate_chunks(run_deps.retrieved_chunks),
+        )
 
-    @property
-    def vector_store(self) -> VectorStore:
-        """Expose VectorStore so the ingestion pipeline can share it."""
-        return self._vector_store
+    def close(self) -> None:
+        """Release resources owned by the agent."""
+        self._reranker.close()

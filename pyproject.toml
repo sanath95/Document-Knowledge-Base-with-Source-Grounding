@@ -6,10 +6,33 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "chromadb>=1.5.9",
-    "langchain-text-splitters>=1.1.2",
+    "langfuse>=4.14.2,<5",
     "openai>=2.36.0",
-    "pydantic-ai>=1.93.0",
-    "pymupdf4llm>=1.27.2.3",
     "python-dotenv>=1.2.2",
-    "sentence-transformers>=5.4.1",
 ]
+
+[project.optional-dependencies]
+ingest = [
+    "langchain-text-splitters>=1.1.2",
+    "pymupdf4llm>=1.27.2.3",
+]
+serve = [
+    "fastapi>=0.141.1",
+    "langgraph>=1.2.10",
+    "langgraph-checkpoint-sqlite>=3.0.0",
+    "pydantic>=2.12.5",
+    "pydantic-ai-slim[openai]>=1.93.0",
+    "rank-bm25>=0.2.2",
+    "sentence-transformers>=5.4.1",
+    "torch>=2.11.0",
+    "transformers>=5.8.0,<6",
+    "uvicorn>=0.46.0",
+]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true

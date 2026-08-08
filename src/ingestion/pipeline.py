@@ -7,6 +7,8 @@ Async where it benefits (batched embedding), sync otherwise.
 
 from __future__ import annotations
 
+import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 from config.settings import Settings
@@ -14,10 +16,19 @@ from ingestion.chunker import MarkdownChunker
 from ingestion.embedder import Embedder
 from ingestion.pdf_parser import PDFParser
 from retrieval.vector_store import VectorStore
-from utils.logging import get_logger
 from utils.models import DocumentChunk
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class IngestionSummary:
+    """Small observable summary of a completed folder ingestion run."""
+
+    document_count: int
+    successful_document_count: int
+    chunk_count: int
+    failed_files: tuple[str, ...]
 
 
 class IngestionPipeline:
@@ -36,13 +47,16 @@ class IngestionPipeline:
         self._chunker = MarkdownChunker(settings.ingestion)
         self._embedder = Embedder(settings.openai_api_key, settings.embedding)
 
-    async def run(self) -> None:
+    async def run(self) -> IngestionSummary:
         """
         Discover PDFs in the configured folder and ingest each one.
 
         Raises:
             NotADirectoryError: If the PDF folder does not exist.
             FileNotFoundError:  If no PDFs are found.
+
+        Returns:
+            Counts and failed filenames for logging and observability.
         """
         folder = self._settings.ingestion.pdf_folder
         if not folder.is_dir():
@@ -56,9 +70,7 @@ class IngestionPipeline:
         if not pdf_files:
             raise FileNotFoundError(f"No PDF files found in: {folder}")
 
-        logger.info(
-            "Found %d PDF(s) in '%s'", len(pdf_files), folder
-        )
+        logger.info("Found %d PDF(s) in '%s'", len(pdf_files), folder)
 
         total_chunks = 0
         failed: list[str] = []
@@ -78,18 +90,12 @@ class IngestionPipeline:
             len(pdf_files) - len(failed),
             failed or "none",
         )
-
-    async def ingest_file(self, pdf_path: Path) -> int:
-        """
-        Ingest a single PDF file.
-
-        Args:
-            pdf_path: Path to the PDF.
-
-        Returns:
-            Number of chunks stored.
-        """
-        return await self._ingest_pdf(pdf_path)
+        return IngestionSummary(
+            document_count=len(pdf_files),
+            successful_document_count=len(pdf_files) - len(failed),
+            chunk_count=total_chunks,
+            failed_files=tuple(failed),
+        )
 
     # ── Private ───────────────────────────────────────────────────────────────
 

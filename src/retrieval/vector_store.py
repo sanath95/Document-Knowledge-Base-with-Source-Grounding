@@ -7,15 +7,14 @@ Handles collection lifecycle, upsert, and vector query.
 
 from __future__ import annotations
 
-from collections import defaultdict
+import logging
 
 import chromadb
 
 from config.settings import ChromaConfig
-from utils.logging import get_logger
-from utils.models import DocumentChunk, DocumentIndex, RetrievedChunk
+from utils.models import DocumentChunk, RetrievedChunk
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class VectorStore:
@@ -73,7 +72,6 @@ class VectorStore:
         self,
         query_embedding: list[float],
         top_k: int = 10,
-        filters: dict | None = None,
     ) -> list[RetrievedChunk]:
         """
         Retrieve the *top_k* most similar chunks.
@@ -81,46 +79,28 @@ class VectorStore:
         Args:
             query_embedding: Embedding of the search query.
             top_k:           Maximum number of results.
-            filters:         Optional ChromaDB metadata filter dict.
 
         Returns:
             List of RetrievedChunk objects (unranked; score = cosine similarity).
         """
-        query_kwargs: dict = {
-            "query_embeddings": [query_embedding],
-            "n_results": top_k,
-            "include": ["documents", "metadatas"],
-        }
-        if filters:
-            query_kwargs["where"] = filters
+        result = self._collection.query(
+            query_embeddings=[query_embedding],
+            n_results=top_k,
+            include=["documents", "metadatas"],
+        )
 
-        result = self._collection.query(**query_kwargs)
-
+        ids: list[str] = result["ids"][0]
         docs: list[str] = result["documents"][0]
         metadatas: list[dict] = result["metadatas"][0]
 
         return [
-            RetrievedChunk(document=doc, metadata=meta, score=0.0)
-            for doc, meta in zip(docs, metadatas)
-        ]
-
-    def list_documents(self) -> list[DocumentIndex]:
-        """
-        Return a summary of all indexed PDFs and their chunk counts.
-
-        Returns:
-            Alphabetically sorted list of DocumentIndex objects.
-        """
-        result = self._collection.get(include=["metadatas"])
-        counts: dict[str, int] = defaultdict(int)
-
-        for meta in result.get("metadatas") or []:
-            pdf_name: str = (meta or {}).get("pdf_name", "<unknown>")
-            counts[pdf_name] += 1
-
-        return [
-            DocumentIndex(pdf_name=name, chunk_count=count)
-            for name, count in sorted(counts.items())
+            RetrievedChunk(
+                chunk_id=chunk_id,
+                document=doc,
+                metadata=meta,
+                score=0.0,
+            )
+            for chunk_id, doc, meta in zip(ids, docs, metadatas)
         ]
 
     @property

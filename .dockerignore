@@ -23,6 +23,7 @@ env/
 data/
 knowledge_base/
 hf_models/
+conversation_checkpoints.sqlite3*
 
 # Dev tooling
 .git/
@@ -31,5 +32,4 @@ hf_models/
 *.swp
 
 # Local files not needed in image builds
-uv.lock
 .python-version
