@@ -1,16 +1,17 @@
 # Document Knowledge Base with Source Grounding
 
-A document question-answering project for indexing local PDFs and answering questions from their contents with page-level source references.
+A document question-answering project for indexing local PDFs and answering questions from their contents with **page-level source references**.
 
 ## How It Works
 
 ### Ingestion lifecycle
+
 ```mermaid
 flowchart LR
     Start@{ shape: sm-circ, label: "Start" }
     PDFs@{ shape: docs, label: "PDF files" }
     Parser["Parse PDF"]
-    Chunk["Semantic chunking"]
+    Chunk["Header-aware chunking"]
     Embed@{ shape: subproc, label: "Generate embeddings" }
     Chroma@{ shape: cyl, label: "Vector database" }
     Stop@{ shape: framed-circle, label: "Done" }
@@ -31,10 +32,10 @@ flowchart LR
     class Start,Stop terminal
 ```
 
-1. **Extract:** ``PyMuPDF4LLM`` converts each PDF into Markdown while preserving page boundaries. Its automatic OCR support is available when needed.
-2. **Semantic Chunking:** Each page is split at Markdown headings. Chunks retain the source filename, page number, and header metadata for retrieval and citations.
+1. **Extract:** `PyMuPDF4LLM` converts each PDF into Markdown while preserving page boundaries. The parser relies on PyMuPDF4LLM's default automatic OCR behavior.
+2. **Chunk:** Each page is split at Markdown headings. Chunks retain the source filename, page number, and header metadata.
 3. **Embed:** The embedding model is configurable and defaults to `text-embedding-3-small`.
-4. **Store:** Chunks, metadata, and vectors are upserted into a local persistent ``ChromaDB`` collection.
+4. **Store:** Chunks, metadata, and vectors are upserted into a local persistent `ChromaDB` collection.
 
 ### Query lifecycle
 
@@ -47,7 +48,7 @@ flowchart TD
     subgraph FastAPI
         Query --> Context
         subgraph LangGraph
-            Context@{ shape: subproc, label: "Contextualize query<br/>(LLM)" }
+            Context@{ shape: subproc, label: "Resolve query<br/>(LLM)" }
             Rephrase@{ shape: lean-r, label: "Request query rephrasing" }
             Classify@{ shape: subproc, label: "Safety classifier<br/>(LLM)" }
             Guardrail@{ shape: lean-r, label: "Guardrail response" }
@@ -55,7 +56,6 @@ flowchart TD
             Validate@{ shape: subproc, label: "Answer validator<br/>(LLM)" }
             Result@{ shape: lean-r, label: "Answer + validation results" }
 
-            
             Context -->|failed| Rephrase
             Context -->|resolved query| Classify
             Classify -->|unsafe| Guardrail
@@ -68,7 +68,7 @@ flowchart TD
                 Fuse["Fuse results"]
                 Rerank["Rerank documents"]
 
-                Agent -->|tool call| Retrieve
+                Agent -->|focused search query| Retrieve
                 Retrieve --> Fuse
                 Retrieve <--> |dense retrieval| VectorDatabase@{ shape: cyl, label: "Vector database" }
                 Retrieve <--> |sparse retrieval| Index@{ shape: cyl, label: "Search index" }
@@ -93,26 +93,24 @@ flowchart TD
     class Start,StopRephrase,StopGuardrail,StopResult terminal
 ```
 
-- ``FastAPI`` validates requests and exposes the `POST /query` endpoint.
-- ``LangGraph`` provides stateful orchestration and coordinates the workflow. Conversation state is checkpointed in `SQLite`.
-- **Query contextualization** uses recent conversation history to rewrite each request as a standalone document query, resolving references, omitted subjects, comparisons, and constraints.
-- **Safety classification** evaluates the resolved query in its conversational context and routes unsafe requests to a guardrail response before retrieval or answer generation.
-- **Agentic RAG** is implemented with a ``Pydantic AI`` tool-calling agent. It plans focused searches, rewrites retrieval queries, evaluates the returned evidence, and can search again before producing an answer grounded only in the documents.
+- `FastAPI` validates requests and exposes the `POST /query` endpoint.
+- `LangGraph` orchestrates the workflow and checkpoints conversation state in `SQLite`.
+- **Query resolution** uses the original query unchanged on the first turn. On follow-up turns, a tool-free contextualizer uses recent history to produce a standalone query.
+- **Safety classification** evaluates the original and resolved queries in their recent conversational context. Unsafe requests and classifier failures stop before retrieval and answer generation.
+- **Agentic RAG** uses a `Pydantic AI` tool-calling agent. The resolved query seeds the agent, which derives focused retrieval queries, evaluates the returned evidence, and can search again before answering.
 - **Multilingual hybrid retrieval** builds a stronger evidence set through four stages:
 
     1. Dense search in ChromaDB finds semantically related passages even when the wording differs.
-    2. ``BM25`` sparse search finds exact terms, names, and identifiers.
-    3. ``Reciprocal Rank Fusion`` combines both ranked lists without normalizing their scores.
+    2. `BM25` sparse search finds exact terms, names, and identifiers.
+    3. `Reciprocal Rank Fusion` combines both ranked lists without normalizing their scores.
     4. The multilingual `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` model jointly scores each query-document pair and reranks the candidates.
 
-- **Answer validation** checks two independent boolean outcomes: whether the answer is faithful to the evidence and whether the retrieved context is sufficient to answer the query. It also provides reasoning when the evaluation is false.
-- **Langfuse** provides optional end-to-end tracing of workflow decisions, model and tool calls, retrieval activity, validation results, latency, and cost.
+- **Answer validation** applies two separate Boolean checks: whether the answer is faithful to the evidence and whether the retrieved context is sufficient for the query. A reason is returned for each failed check.
+- **Langfuse** optionally traces workflow decisions, model and tool calls, retrieval activity, validation results, latency, token usage, and available cost data.
 
 > Confidence scores can suffer from variance and drift, whereas boolean evaluations provide clearer and more repeatable decisions. That is the reason for having a boolean validation.
 
-The resolved standalone query is shared by safety classification, retrieval, answer generation, and validation so every stage works from the same interpretation. Answers cite evidence using the source PDF and page number.
-
-## Features
+## Architecture Decisions
 
 | Area | Decision | Key point |
 | --- | --- | --- |
@@ -120,7 +118,7 @@ The resolved standalone query is shared by safety classification, retrieval, ans
 | Chunking | Preserve page boundaries and split by headings | Chunks retain semantic structure and page-level citation metadata. |
 | Retrieval | Combine dense search and BM25 using RRF and reranking | Semantic and exact-term matches contribute to one ranked result set. |
 | Answering | Use a tool-calling agent grounded in retrieved evidence | The agent can run multiple searches and must cite source pages. |
-| Orchestration | Use LangGraph for context, safety, QA, and validation | Every stage uses the same resolved standalone query. |
+| Orchestration | Use LangGraph for context, safety, QA, and validation | Stateful, scalable control flow. |
 | Persistence | Store vectors in ChromaDB and conversations in SQLite | Document knowledge and conversation state remain separate. |
 | Quality | Validate faithfulness and context sufficiency independently | Answer fluency alone is not treated as evidence of correctness. |
 | Containerization | Use separate Docker images managed with Docker Compose | Ingestion and serving remain isolated while sharing persistent data volumes. |
@@ -130,7 +128,7 @@ The resolved standalone query is shared by safety classification, retrieval, ans
 
 ```text
 src/
-  agent/          Pydantic-AI document QA agent and retrieval tool
+  agent/          Pydantic AI document QA agent and retrieval tool
   config/         Environment-driven application settings
   ingestion/      PDF parsing, chunking, embedding, and ingestion pipeline
   orchestration/  Safety classification, answer validation, and query graph
@@ -147,7 +145,7 @@ docker-compose.yml Ingestion and serving services with persistent volumes
 env.example        Environment variable template
 ```
 
-`pyproject.toml` and `uv.lock` are the dependency sources of truth. The Docker build uses uv in a builder stage and copies only the resulting virtual environment into the Python runtime image.
+`pyproject.toml` and `uv.lock` are the dependency sources of truth.
 
 ## Prerequisites
 
@@ -160,13 +158,15 @@ env.example        Environment variable template
 
 ## Configuration
 
-The application calls `load_dotenv()` and then reads settings from the process environment. Existing runtime environment variables take precedence over values in `.env`; defaults are used for variables that are absent. Set variables before starting the ingestion or serving process.
+The ingestion and serving dependencies call `load_dotenv()` before loading application settings. Existing process environment variables take precedence over `.env`; defaults are used for variables that are absent.
 
 To use a local dotenv file, copy the template and provide your values:
 
 ```powershell
 Copy-Item env.example .env
 ```
+
+Replace the example values you use. If Langfuse tracing is not required, remove or comment out its placeholder public and secret keys; nonempty placeholders make the application treat tracing as configured.
 
 `OPENAI_API_KEY` is the only required application setting:
 
@@ -185,11 +185,10 @@ The configurable defaults are:
 | `CHROMA_PERSIST_DIR` | `./knowledge_base` | Both pipelines |
 | `RERANKER_MODEL` | `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` | Serving |
 | `RERANKER_CACHE_DIR` | `./hf_models` | Serving |
-| `RERANKER_THRESHOLD` | `0.0` | Serving |
 | `CLASSIFIER_MODEL` | `gpt-5.4-nano` | Serving |
 | `CONTEXTUALIZER_MODEL` | `gpt-5.4-nano` | Serving |
 | `VALIDATOR_MODEL` | `gpt-5.4-nano` | Serving |
-| `LLM_MODEL` | `openai:gpt-4o-mini` | Serving |
+| `LLM_MODEL` | `openai:gpt-5.4` | Serving |
 | `LLM_TEMPERATURE` | `0.0` | Serving |
 | `DENSE_TOP_K` | `25` | Serving |
 | `BM25_TOP_K` | `25` | Serving |
@@ -202,7 +201,9 @@ The configurable defaults are:
 | `HOST` | `0.0.0.0` | `src/serve.py` process |
 | `PORT` | `8000` | `src/serve.py` process |
 
-All numeric settings must contain values that Python can parse as the corresponding `int` or `float`. ChromaDB uses cosine distance; supported extensions, Markdown header levels, and parallel agent tool calls are fixed in code.
+Numeric settings must contain valid integer or floating-point values. `EMBED_BATCH_SIZE` must be positive, `HISTORY_MAX_TURNS` must be at least `1`, and `RRF_K` must be nonnegative. Retrieval limits should be positive to return evidence. ChromaDB uses cosine distance; supported extensions, Markdown header levels, and parallel agent tool calls are fixed in code.
+
+For local `python src/serve.py` runs, set `HOST` and `PORT` in the process environment. They are read before the serving dependencies load `.env`. Docker Compose supplies them through the service environment.
 
 ### Optional Langfuse configuration
 
@@ -220,11 +221,9 @@ The Langfuse SDK also supports `LANGFUSE_TRACING_ENABLED=false` to disable expor
 
 ## Observability
 
-When Langfuse credentials are configured, each `/query` request creates a `kb.query` observation containing conversational query contextualization, safety classification, the Pydantic-AI QA agent's model and tool spans, retrieval summaries, answer validation, and the final workflow outcome. Successfully completed validation adds boolean `faithfulness` and `context_sufficiency` trace scores. The response includes `X-Langfuse-Trace-Id` when a trace ID is available.
+When Langfuse credentials are configured, each `/query` request creates a `kb.query` observation containing query resolution, safety classification, the Pydantic AI agent's model and tool spans, retrieval summaries, answer validation, and the final workflow outcome. Successfully completed validation adds Boolean `faithfulness` and `context_sufficiency` trace scores. The response includes `X-Langfuse-Trace-Id` when a trace ID is available.
 
-The ingestion command creates a `kb.ingestion` observation with document, chunk, and failed-file counts. Embedding observations record batch sizes, dimensions, and token usage, but not embedding vectors. Retrieval observations record selected chunk IDs, source pages, and reranker scores rather than copying the selected chunk text into the manual retrieval observation.
-
-Observability initialization, observation creation, trace-ID lookup, flushing, and shutdown are handled defensively so those operations do not intentionally determine the application result. Instrumented model and tool calls are still subject to the behavior of the Langfuse SDK.
+The ingestion command creates a `kb.ingestion` observation with document, chunk, and failed-file counts. Embedding observations record batch sizes, dimensions, and token usage, but not embedding vectors. Manual retrieval observations record selected chunk IDs, source pages, and reranker scores. Tracing helpers are designed to fail open, although instrumented model and tool calls remain subject to Langfuse SDK behavior.
 
 ## Local Usage
 
@@ -262,7 +261,7 @@ curl.exe -X POST http://localhost:8000/query `
 
 ### `POST /query`
 
-The endpoint accepts a UUID `conversation_id` and one `query` string. Leading and trailing whitespace is removed; the resulting query must contain between 1 and 10,000 characters. Generate a new conversation ID for the first turn and reuse it for every follow-up in that conversation.
+The endpoint accepts a UUID `conversation_id` and one `query` string. The submitted string must contain between 1 and 10,000 characters. Leading and trailing whitespace is then removed, and a whitespace-only query is rejected. Generate a new conversation ID for the first turn and reuse it for every follow-up in that conversation.
 
 ```json
 {
@@ -271,7 +270,9 @@ The endpoint accepts a UUID `conversation_id` and one `query` string. Leading an
 }
 ```
 
-LangGraph checkpoints the conversation state in SQLite. On follow-up turns, a tool-less contextualizer uses recent exchanges to produce one standalone query. Safety classification, retrieval, answer generation, and validation all use that same resolved meaning; only the user's original wording and the final answer are appended to conversation history. Retrieved chunks and tool results remain outside the model-visible history.
+LangGraph checkpoints conversation state in SQLite. The first turn uses the submitted query directly; on follow-up turns, a tool-free contextualizer uses recent exchanges to produce a standalone query. The classifier sees the original query, resolved query, and recent history. The QA agent receives the resolved query and history, then formulates focused retrieval queries.
+
+Only a completed QA path appends a turn containing the user's original wording and the generated answer. Guardrail, classification-failure, and contextualization-failure responses are not appended. Retrieval results are visible to the agent during the current run but are not persisted as model-visible history for later turns.
 
 Responses produced by the query workflow are `text/plain`. For a completed QA path, the body contains the generated answer followed by a `Validation` block:
 
@@ -286,11 +287,13 @@ Validation
 
 HTTP 200 means the application completed one of its defined workflow paths; it does not by itself mean the answer passed both validation checks.
 
+Every workflow response includes `X-Conversation-Id` and `X-Content-Type-Options: nosniff`. When tracing supplies an identifier, the response also includes `X-Langfuse-Trace-Id`.
+
 | Situation | HTTP status | Response |
 | --- | --- | --- |
-| Safe query, answer and validation completed | `200` | Answer plus boolean validation results and reasons for failed checks |
+| Safe query, answer and validation completed | `200` | Answer plus Boolean validation results and reasons for failed checks |
 | Unsafe query | `200` | Fixed guardrail message; the QA agent is not called |
-| Conversational follow-up cannot be resolved | `200` | Fixed rephrasing request; the classifier and QA agent are not called |
+| Contextualizer fails or returns no usable structured result | `200` | Fixed rephrasing request; the classifier and QA agent are not called |
 | Safety classifier fails or returns no usable assessment | `200` | Fixed classification-failure message; the QA agent is not called |
 | Answer validator fails or returns no usable assessment | `200` | Generated answer with both validation fields marked `unavailable` |
 | Request body fails FastAPI/Pydantic validation | `422` | FastAPI JSON validation error |
@@ -301,7 +304,7 @@ The validator receives the resolved standalone query, completed answer, and dedu
 - `faithfulness`: whether each material answer claim is supported by the retrieved chunks or a direct inference from them.
 - `context_sufficiency`: whether the retrieved chunks contain enough information to answer every material part of the query.
 
-A failed check does not change the HTTP status. Its boolean value and reason are included in the response body.
+A failed check does not change the HTTP status. Its Boolean value and reason are included in the response body.
 
 ## Docker Usage
 
@@ -346,10 +349,9 @@ If the indexed documents do not contain enough evidence, the agent is instructed
 
 ## Known Limitations
 
-- PyMuPDF4LLM's default automatic OCR decision is available during extraction, but images are not embedded or indexed as image content.
+- Extraction relies on PyMuPDF4LLM's default OCR behavior. Recognized text can be indexed, but images themselves are not embedded or indexed as image content.
 - Chunking splits each page at Markdown `h1`-`h3` headings. There is no secondary chunk-size limit or overlap for long header sections.
 - Ingestion uses ChromaDB upserts. Re-indexing changed PDFs does not remove obsolete chunk IDs that are no longer produced.
-- The serving process builds its in-memory BM25 index from ChromaDB at startup. It must be restarted after ingestion changes the collection.
 - File discovery matches `*.pdf`; uppercase extensions may not match on case-sensitive filesystems.
 - Embedding batches for one document are submitted concurrently, so very large documents may encounter provider rate limits.
 - Individual PDF failures are skipped and logged without making the overall ingestion command exit non-zero.
